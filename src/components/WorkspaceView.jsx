@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun } from 'lucide-react';
+import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download } from 'lucide-react';
+import ExportModal from './ExportModal';
+
+const availableIcons = {
+  Tag, Building2, ShieldAlert, User, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText
+};
 
 export default function WorkspaceView({ 
   entreprises, 
@@ -7,14 +12,19 @@ export default function WorkspaceView({
   setCurrentIndex, 
   extractedEntities, 
   setExtractedEntities, 
-  handleExportCSV, 
+  categories = [], 
+  highlightRules = { capitals: true, acronyms: false, legal: false },
   resetSession 
 }) {
   const currentCompany = entreprises[currentIndex];
   const progress = entreprises.length > 0 ? Math.round((Object.keys(extractedEntities).length / entreprises.length) * 100) : 0;
 
+  const [showExportModal, setShowExportModal] = useState(false);
+
   const [currentEntityName, setCurrentEntityName] = useState('');
-  const [currentEntityType, setCurrentEntityType] = useState('Entreprise');
+  // Use the first category as the default type, fallback to a string if categories is empty (shouldn't happen)
+  const defaultCategoryId = categories.length > 0 ? categories[0].id : 'Entreprise';
+  const [currentEntityType, setCurrentEntityType] = useState(defaultCategoryId);
   const [currentEntityNote, setCurrentEntityNote] = useState(''); // NOUVEAU: Champ Note
   
   const [searchQuery, setSearchQuery] = useState('');
@@ -37,15 +47,23 @@ export default function WorkspaceView({
 
   // NOUVEAU: Moteur de recherche global simple
   useEffect(() => {
-    if (searchQuery.length > 2) {
-      const results = entreprises.filter(c => 
-        (c.name && c.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (c.text && c.text.toLowerCase().includes(searchQuery.toLowerCase()))
-      ).slice(0, 5); // Limiter à 5 résultats
-      setSearchResults(results);
-    } else {
-      setSearchResults([]);
+    if (!searchQuery) {
+        setSearchResults([]);
+        return;
     }
+    const lowerQ = searchQuery.toLowerCase();
+    const results = entreprises.filter(e => {
+      // Search UUID
+      if (e.uuid.toLowerCase().includes(lowerQ)) return true;
+      // Search inside metadata
+      if (e.metadata) {
+        return Object.values(e.metadata).some(val => 
+          String(val).toLowerCase().includes(lowerQ)
+        );
+      }
+      return false;
+    }).slice(0, 10);
+    setSearchResults(results);
   }, [searchQuery, entreprises]);
 
   // NOUVEAU: Raccourcis Clavier (Hotkeys)
@@ -55,9 +73,12 @@ export default function WorkspaceView({
       if (document.activeElement.tagName === 'INPUT' && document.activeElement !== entityInputRef.current) return;
       if (document.activeElement.tagName === 'TEXTAREA') return;
 
-      if (e.key === '1') { e.preventDefault(); setCurrentEntityType('Entreprise'); }
-      if (e.key === '2') { e.preventDefault(); setCurrentEntityType('Autorite'); }
-      if (e.key === '3') { e.preventDefault(); setCurrentEntityType('Personne'); }
+      // Map numeric keys (1-9) to categories dynamically
+      const keyIndex = parseInt(e.key) - 1;
+      if (keyIndex >= 0 && keyIndex < categories.length && keyIndex < 9) {
+        e.preventDefault();
+        setCurrentEntityType(categories[keyIndex].id);
+      }
       if (e.key === 'Enter') {
         e.preventDefault();
         handleAddEntity();
@@ -76,20 +97,48 @@ export default function WorkspaceView({
     setCurrentEntityName('');
     setCurrentEntityNote('');
   }, [currentIndex]);
-
   const renderHighlightedText = (text) => {
     if (!text) return null;
-    // Regex pour Majuscules Latines, Cyrilliques [A-Z\u0410-\u042F]
-    const regex = /(\b[A-Z\u0410-\u042F][a-zA-Z0-9\.\-\u0400-\u04FF]+\b)/g;
-    const parts = text.split(regex);
+
+    // Construire dynamiquement le regex en fonction des règles actives
+    const regexParts = [];
+
+    // 1. Structures Légales
+    if (highlightRules.legal) {
+      regexParts.push('(?:LLC|Ltd|Inc|SA|SARL|GmbH|Bv|Plc|PLC|Corp|Co|Group|AG|SAS|S\\.A\\.)');
+    }
+
+    // 2. Acronymes (mots tout en majuscules de 2+ lettres)
+    if (highlightRules.acronyms) {
+      regexParts.push('[A-Z\u0410-\u042F]{2,}');
+    }
+
+    // 3. Majuscules initiales
+    if (highlightRules.capitals) {
+      regexParts.push('[A-Z\u0410-\u042F][a-zA-Z0-9.\u0400-\u04FF-]+');
+    }
+
+    // Si aucune règle, retourner le texte brut
+    if (regexParts.length === 0) {
+      return <span>{text}</span>;
+    }
+
+    // Construire la regex finale — on utilise \b (word boundary) autour du groupe
+    const source = '\\b(' + regexParts.join('|') + ')\\b';
+    const combinedRegex = new RegExp(source, 'g');
+    const parts = text.split(combinedRegex);
 
     return parts.map((part, index) => {
-      if (part.match(/^[A-Z\u0410-\u042F][a-zA-Z0-9\.\-\u0400-\u04FF]+$/)) {
+      if (!part) return null;
+
+      // Re-tester si le fragment est un match
+      const testRegex = new RegExp('^(?:' + regexParts.join('|') + ')$');
+      if (testRegex.test(part)) {
         return (
           <span
             key={index}
             className="bg-red-100 text-red-900 border-b-2 border-red-300 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800 font-bold px-1 rounded-sm mx-px transition-colors hover:bg-red-200 dark:hover:bg-red-800/50"
-            title="Entité potentielle (Majuscule détectée)"
+            title="Entité potentielle détectée"
           >
             {part}
           </span>
@@ -171,6 +220,7 @@ export default function WorkspaceView({
   const handlePrev = () => currentIndex > 0 && setCurrentIndex(prev => prev - 1);
 
   return (
+    <>
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-4 sm:p-6 font-sans text-slate-900 dark:text-slate-100 flex flex-col items-center transition-colors duration-300">
       
       {/* HEADER FIXE */}
@@ -210,7 +260,9 @@ export default function WorkspaceView({
                   }}
                 >
                   <span className="font-semibold text-red-600 dark:text-red-400 mr-2">[{result.uuid.substring(0,6)}]</span>
-                  {result.name}
+                  <span className="text-slate-600 dark:text-slate-300">
+                    {result.metadata && Object.values(result.metadata).join(' - ')}
+                  </span>
                 </button>
               ))}
             </div>
@@ -224,8 +276,8 @@ export default function WorkspaceView({
           <button onClick={resetSession} className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-600 dark:text-slate-300 px-3 py-2 rounded-md text-sm font-medium transition" title="Effacer la mémoire">
             <Trash2 className="w-4 h-4" /> <span className="hidden sm:inline">Réinit</span>
           </button>
-          <button onClick={handleExportCSV} className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium transition shadow-sm">
-            <Save className="w-4 h-4" /> Exporter
+          <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium transition shadow-sm">
+            <Download className="w-4 h-4" /> Exporter
           </button>
         </div>
       </div>
@@ -244,15 +296,40 @@ export default function WorkspaceView({
             </div>
 
             <div className="p-6">
-              <h3 className="text-2xl font-bold mb-6 pb-4 border-b border-slate-100 dark:border-slate-700">{currentCompany?.name}</h3>
+              {/* Dynamic Metadata Context Panel */}
+              {currentCompany?.metadata && Object.keys(currentCompany.metadata).length > 0 && (
+                <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-b border-slate-100 dark:border-slate-700 pb-6">
+                  {Object.entries(currentCompany.metadata).map(([key, value]) => (
+                    <div key={key} className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">{key}</p>
+                      <p className="text-sm font-medium text-slate-900 dark:text-slate-100 wrap-break-word px-1">
+                        {value ? String(value) : <span className="italic text-slate-400">Non renseigné</span>}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div
                 ref={scrollContainerRef}
-                className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed bg-[#fffae6] dark:bg-amber-900/10 p-6 rounded-lg border border-[#ffe066] dark:border-amber-700/50 cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 max-h-[50vh] overflow-y-auto"
+                className="flex flex-col gap-6 max-h-[50vh] overflow-y-auto pr-2"
                 onMouseUp={handleTextSelection}
                 onTouchEnd={handleTextSelection}
                 title="Surlignez du texte ici pour le formulaire"
               >
-                {renderHighlightedText(currentCompany?.text)}
+                {currentCompany?.texts && currentCompany.texts.map((textBlock, idx) => (
+                  <div key={idx} className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
+                    <div className="absolute top-0 left-0 bg-[#ffe066] dark:bg-amber-700 text-amber-900 dark:text-amber-100 text-xs font-bold px-3 py-1 rounded-br-lg rounded-tl-lg shadow-sm">
+                      {textBlock.title}
+                    </div>
+                    <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4">
+                      {renderHighlightedText(textBlock.content)}
+                    </div>
+                  </div>
+                ))}
+                {(!currentCompany?.texts || currentCompany.texts.length === 0) && (
+                  <div className="text-center text-slate-500 italic py-10">Aucun texte à analyser.</div>
+                )}
               </div>
             </div>
           </div>
@@ -294,9 +371,11 @@ export default function WorkspaceView({
                   onChange={(e) => setCurrentEntityType(e.target.value)}
                   className="flex-1 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border border-slate-300 dark:border-slate-600 rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-red-500"
                 >
-                  <option value="Entreprise" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">🏢 Entreprise [1]</option>
-                  <option value="Autorite" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">🛡️ Autorité [2]</option>
-                  <option value="Personne" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">👤 Personne [3]</option>
+                  {categories.map((cat, index) => (
+                    <option key={cat.id} value={cat.id} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
+                      {cat.name} [{index + 1}]
+                    </option>
+                  ))}
                 </select>
                 <button onClick={handleAddEntity} className="bg-slate-800 text-white px-6 py-2 rounded-md font-bold hover:bg-slate-900 transition">Associer [Entrée]</button>
               </div>
@@ -332,16 +411,31 @@ export default function WorkspaceView({
                       <button onClick={() => handleRemoveEntity(idx)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 p-1.5 rounded transition opacity-0 group-hover:opacity-100"><Trash2 className="w-4 h-4" /></button>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <div className={`p-1.5 rounded text-white shrink-0 ${entity.type === 'Autorite' ? 'bg-red-600' : entity.type === 'Personne' ? 'bg-blue-600' : 'bg-slate-700'}`}>
-                        {entity.type === 'Autorite' ? <ShieldAlert className="w-3 h-3" /> : entity.type === 'Personne' ? <User className="w-3 h-3" /> : <Building2 className="w-3 h-3" />}
-                      </div>
-                      <select value={entity.type} onChange={(e) => handleChangeEntityType(idx, e.target.value)} className="text-xs uppercase tracking-wider font-bold bg-transparent dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1">
-                        <option value="Entreprise" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Entreprise</option>
-                        <option value="Autorite" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Autorité</option>
-                        <option value="Personne" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Personne</option>
-                      </select>
-                    </div>
+                    {/* Component resolving for icon and color dynamically */}
+                    {(() => {
+                      const cat = categories.find(c => c.id === entity.type) || 
+                        { name: entity.type, color: 'bg-slate-700', icon: 'Tag' }; // Fallback for old/deleted categories
+                      
+                      // Dynamically render the icon component using our imported dictionary
+                      const IconComp = availableIcons[cat.icon] || availableIcons['Tag'];
+
+                      return (
+                        <div className="flex items-center gap-2">
+                          <div className={`p-1.5 rounded text-white shrink-0 ${cat.color}`}>
+                            <IconComp className="w-3 h-3" />
+                          </div>
+                          <select value={entity.type} onChange={(e) => handleChangeEntityType(idx, e.target.value)} className="text-xs uppercase tracking-wider font-bold bg-transparent dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1">
+                            {categories.map(c => (
+                              <option key={c.id} value={c.id} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">{c.name}</option>
+                            ))}
+                            {/* Keep the current type as an option even if it was deleted from configuration */}
+                            {!categories.some(c => c.id === entity.type) && (
+                              <option value={entity.type} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">{entity.type} (Supprimée)</option>
+                            )}
+                          </select>
+                        </div>
+                      );
+                    })()}
                   </li>
                 ))}
               </ul>
@@ -350,5 +444,15 @@ export default function WorkspaceView({
         </div>
       </div>
     </div>
+
+    {/* Export Modal */}
+    <ExportModal
+      isOpen={showExportModal}
+      onClose={() => setShowExportModal(false)}
+      entreprises={entreprises}
+      extractedEntities={extractedEntities}
+      categories={categories}
+    />
+    </>
   );
 }

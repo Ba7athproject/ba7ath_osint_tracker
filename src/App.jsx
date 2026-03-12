@@ -16,10 +16,20 @@ export default function ManualTagger() {
   const [session, setSession, removeSession] = useLocalStorage(LOCAL_STORAGE_KEY, {
     entreprises: [],
     extractedEntities: {},
-    currentIndex: 0
+    currentIndex: 0,
+    categories: [
+      { id: 'Entreprise', name: 'Entreprise', color: 'bg-slate-700', icon: 'Building2' },
+      { id: 'Autorite', name: 'Autorité', color: 'bg-red-600', icon: 'ShieldAlert' },
+      { id: 'Personne', name: 'Personne', color: 'bg-blue-600', icon: 'User' }
+    ],
+    highlightRules: {
+      capitals: true,
+      acronyms: false,
+      legal: false
+    }
   });
 
-  const [columnMapping, setColumnMapping] = useState({ id: '', title: '', text: '' });
+  const [columnMapping, setColumnMapping] = useState({ id: '', textColumns: [], metadata: [] });
   const [papaLoaded, setPapaLoaded] = useState(false);
 
   // Charger PapaParse globalement
@@ -52,58 +62,47 @@ export default function ManualTagger() {
   };
 
   const confirmConfiguration = () => {
-    if (!columnMapping.id || !columnMapping.title || !columnMapping.text) {
-      alert("Veuillez sélectionner une colonne pour chaque champ.");
+    if (!columnMapping.textColumns || columnMapping.textColumns.length === 0) {
+      alert("Vous devez sélectionner au moins une colonne de texte à analyser.");
       return;
     }
 
-    const formattedData = rawCsvData.map((row, idx) => ({
-      uuid: row[columnMapping.id] || `row-${idx}`,
-      name: row[columnMapping.title] || "Sans Nom",
-      text: row[columnMapping.text] || "Aucun texte"
-    })).filter(c => c.uuid);
+    const formattedData = rawCsvData.map((row, idx) => {
+      // Build dynamic metadata object
+      const meta = {};
+      if (columnMapping.metadata && columnMapping.metadata.length > 0) {
+        columnMapping.metadata.forEach(key => {
+          meta[key] = row[key] || "";
+        });
+      }
+
+      // Build text blocks array
+      const textBlocks = columnMapping.textColumns.map(col => ({
+        title: col,
+        content: row[col] || ""
+      })).filter(block => block.content.trim() !== "");
+
+      return {
+        uuid: columnMapping.id && row[columnMapping.id] ? row[columnMapping.id] : `row-${idx}`,
+        texts: textBlocks,
+        metadata: meta
+      };
+    }).filter(c => c.texts.length > 0);
 
     setSession({
       entreprises: formattedData,
       currentIndex: 0,
-      extractedEntities: {}
+      extractedEntities: {},
+      categories: session.categories || [
+        { id: 'Entreprise', name: 'Entreprise', color: 'bg-slate-700', icon: 'Building2' },
+        { id: 'Autorite', name: 'Autorité', color: 'bg-red-600', icon: 'ShieldAlert' },
+        { id: 'Personne', name: 'Personne', color: 'bg-blue-600', icon: 'User' }
+      ],
+      highlightRules: session.highlightRules || { capitals: true, acronyms: false, legal: false }
     });
 
     setIsCsvLoaded(true);
     setConfigStep(false);
-  };
-
-  const handleExportCSV = () => {
-    if (Object.keys(session.extractedEntities).length === 0) {
-      return alert("Aucune entité. L'exportation est annulée.");
-    }
-
-    // Ajout de la colonne note_contexte dans l'export CSV
-    let csvContent = "uuid_source,nom_source,cible_extraite,type_cible,note_contexte\n";
-
-    Object.entries(session.extractedEntities).forEach(([uuid, entities]) => {
-      const source = session.entreprises.find(c => c.uuid === uuid);
-      const sName = source ? source.name.replace(/"/g, '""') : "Inconnu";
-      const fName = sName.includes(',') ? `"${sName}"` : sName;
-
-      entities.forEach(entity => {
-        const eName = entity.name.replace(/"/g, '""');
-        const feName = eName.includes(',') ? `"${eName}"` : eName;
-        
-        const eNote = entity.note ? entity.note.replace(/"/g, '""') : '';
-        const fNote = eNote.includes(',') || eNote.includes('\n') ? `"${eNote}"` : eNote;
-
-        csvContent += `"${uuid}",${fName},${feName},${entity.type},${fNote}\n`;
-      });
-    });
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `Ba7ath_Extraction_NER_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   const resetSession = () => {
@@ -125,6 +124,10 @@ export default function ManualTagger() {
         csvHeaders={csvHeaders} 
         columnMapping={columnMapping} 
         setColumnMapping={setColumnMapping}
+        categories={session.categories}
+        setCategories={(newCategories) => setSession(prev => ({ ...prev, categories: typeof newCategories === 'function' ? newCategories(prev.categories) : newCategories }))}
+        highlightRules={session.highlightRules || { capitals: true, acronyms: false, legal: false }}
+        setHighlightRules={(rules) => setSession(prev => ({ ...prev, highlightRules: typeof rules === 'function' ? rules(prev.highlightRules || { capitals: true, acronyms: false, legal: false }) : rules }))}
         onCancel={() => setConfigStep(false)}
         onConfirm={confirmConfiguration}
       />
@@ -138,7 +141,12 @@ export default function ManualTagger() {
       setCurrentIndex={(idx) => setSession(prev => ({ ...prev, currentIndex: typeof idx === 'function' ? idx(prev.currentIndex) : idx }))}
       extractedEntities={session.extractedEntities}
       setExtractedEntities={(newEntities) => setSession(prev => ({ ...prev, extractedEntities: typeof newEntities === 'function' ? newEntities(prev.extractedEntities) : newEntities }))}
-      handleExportCSV={handleExportCSV}
+      categories={session.categories || [
+        { id: 'Entreprise', name: 'Entreprise', color: 'bg-slate-700', icon: 'Building2' },
+        { id: 'Autorite', name: 'Autorité', color: 'bg-red-600', icon: 'ShieldAlert' },
+        { id: 'Personne', name: 'Personne', color: 'bg-blue-600', icon: 'User' }
+      ]}
+      highlightRules={session.highlightRules || { capitals: true, acronyms: false, legal: false }}
       resetSession={resetSession}
     />
   );

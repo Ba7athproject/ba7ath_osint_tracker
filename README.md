@@ -7,12 +7,16 @@ Visant la sécurité et la confidentialité, toutes les données traitées via l
 ## Fonctionnalités Principales
 
 - **Importation Multi-formats :** Accepte les fichiers classiques `.csv` via PapaParse, ainsi que les tableurs Excel `.xlsx` via SheetJS.
-- **Support Multilingue Avancé :** Détection automatique Regex des mots contenant des initiales majuscules latines et cyrilliques pour repérer visuellement les cibles potentielles.
-- **Raccourcis Clavier (Hotkeys) :** Optimisez votre temps de qualification en utilisant `1`, `2`, `3` pour sélectionner la catégorie de l'entité, et `Entrée` pour la valider.
+- **Catégories 100% Personnalisables :** Définissez vos propres types d'entités avec leurs propres couleurs et icônes (par défaut: Entreprise, Autorité, Personne).
+- **Extraction Intelligente :** 
+  - Nettoyage automatique des sélections (suppression des espaces, virgules inutiles, et caractères cachés).
+  - Détection anti-doublon insensible à la casse par source.
+  - Détection automatique Regex des mots contenant des initiales majuscules latines et cyrilliques.
+- **Raccourcis Clavier (Hotkeys) :** Optimisez votre temps de qualification en utilisant `1`, `2`, `3`... (mapping automatique selon vos catégories) pour sélectionner le type de l'entité, et `Entrée` pour la valider.
 - **Qualificateur de Context (Note) :** Un champ optionnel de Notes pour expliquer brièvement *pourquoi* une cible a été rattachée (ex: "actionnaire majoritaire de XYZ").
 - **Moteur de Recherche Intégrée :** Barre de recherche rapide dynamique pour investiguer et retrouver instantanément un terme précis parmi un document (par ID ou Nom).
-- **Mode Sombre Natif :** Bouton de la barre d'outils (Toggling) pour basculer en mode sombre afin de reposer la vue en cas d'analyse prolongée.
-- **Sauvegarde et Auto-focus :** Sauvegarde transparente de la session dans le Local Storage, auto-focus intuitif lors de la sélection du texte à analyser, et retour ascendant du document à chaque chargement de la source suivante.
+- **Mode Sombre Natif :** Bouton de la barre d'outils (Toggling) pour basculer en mode sombre, avec adaptation dynamique des contrastes de sélection de texte.
+- **Sauvegarde et Auto-focus :** Sauvegarde transparente de la session et des catégories dans le Local Storage, auto-focus intuitif lors de la sélection du texte à analyser, et retour ascendant du document à chaque chargement de la source suivante.
 - **Architecture Maintenable :** Code refactorisé en de multiples composants React (`UploadView`, `WorkspaceView`, `ConfigureView`) exploitant le hook personnalisé `useLocalStorage`.
 
 ## Prérequis
@@ -45,9 +49,11 @@ Pour exécuter le projet localement, assurez-vous d'avoir installé les outils s
 ## Utilisation
 
 1. **Chargement des Données :** À l'ouverture de l'application, importez un fichier `.csv` contenant les données à analyser.
-2. **Configuration :** Indiquez au système quelles colonnes correspondent à l'Identifiant (ID/UUID), au Nom/Titre, et au Texte.
-3. **Analyse et Annotation :** Lisez les textes affichés à l'écran. Sélectionnez les entités pertinentes à l'aide de votre souris.
-4. **Catégorisation :** Choisissez la catégorie correspondante (Entreprise, Autorité, Personne) et ajoutez-la à la liste des cibles extraites.
+2. **Configuration :** 
+   - Mappez les colonnes de votre fichier avec l'Identifiant (ID/UUID), le Nom/Titre, et le Texte.
+   - Ajoutez, personnalisez (icônes et couleurs) ou supprimez vos propres catégories d'entités de recherche.
+3. **Analyse et Annotation :** Lisez les textes affichés à l'écran. Sélectionnez les entités pertinentes à l'aide de votre souris. Le texte est automatiquement nettoyé.
+4. **Catégorisation :** Choisissez la catégorie correspondante (via la liste déroulante ou les touches `1`, `2`, `3`...) et validez. L'outil vous empêchera silencieusement d'ajouter des doublons.
 5. **Exportation :** Une fois le jeu de données analysé, exportez vos résultats via le bouton "Exporter CSV" situé en haut à droite.
 
 ## Technologies Utilisées
