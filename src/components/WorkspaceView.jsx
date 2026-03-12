@@ -160,20 +160,20 @@ export default function WorkspaceView({
     if (!currentEntityName || currentEntityName.trim().length < 2) return [];
     const input = currentEntityName.trim().toLowerCase();
     const inputRaw = currentEntityName.trim();
-    
+
     // Collecter toutes les entités uniques
     const allNames = new Set();
     Object.values(extractedEntities).forEach((arr) => {
       arr.forEach((e) => allNames.add(e.name));
     });
-    
+
     // Filtrer les noms similaires
     return Array.from(allNames)
       .filter((name) => {
         const lower = name.toLowerCase();
         // Suggérer si inclu (ou incluant) OU si c'est le même mot mais avec une casse différente
         if (lower === input) {
-            return name !== inputRaw; // C'est une variante ! (ex: "TOTAL" vs "total")
+          return name !== inputRaw; // C'est une variante ! (ex: "TOTAL" vs "total")
         }
         return lower.includes(input) || input.includes(lower);
       })
@@ -185,10 +185,12 @@ export default function WorkspaceView({
     const allEntities = Object.values(extractedEntities).flat();
     const nameMap = {};
     allEntities.forEach(e => {
-      const lower = e.name.toLowerCase().trim();
-      if (!nameMap[lower]) nameMap[lower] = new Set();
-      nameMap[lower].add(e.name);
+      // Normalisation plus stricte : trim + minuscule + suppression des doubles espaces
+      const normalized = e.name.toLowerCase().trim().replace(/\s+/g, ' ');
+      if (!nameMap[normalized]) nameMap[normalized] = new Set();
+      nameMap[normalized].add(e.name.trim());
     });
+    // On compte le nombre de groupes qui ont plus d'une variante de nom
     return Object.values(nameMap).filter(variants => variants.size > 1).length;
   }, [extractedEntities]);
 
@@ -224,7 +226,7 @@ export default function WorkspaceView({
   }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, setExtractedEntities]);
 
 
-  // Raccourcis Clavier (Hotkeys) - CORRIGÉS POUR L'OSINT
+  // Raccourcis Clavier (Hotkeys) - CORRIGÉS POUR L'OSINT (Layout Independent)
   useEffect(() => {
     const handleKeyDown = (e) => {
       const activeEl = document.activeElement;
@@ -238,46 +240,57 @@ export default function WorkspaceView({
       // Bloquer tous les raccourcis dans recherche, textarea, select
       if (isInSearch || isInTextArea || isInSelect) return;
 
-      // Raccourcis numériques (1-9) → changer de catégorie.
-      const keyIndex = parseInt(e.key, 10) - 1;
-      if (
-        !Number.isNaN(keyIndex) &&
-        keyIndex >= 0 &&
-        keyIndex < categories.length &&
-        keyIndex < 9
-      ) {
-        if (isInEntityInput) {
-          // Si on tape le nom, on exige la touche Alt pour changer de catégorie (évite de bloquer la frappe des chiffres)
-          if (e.altKey) {
+      // Gestion des chiffres 1-9 via Digit1...Digit9 (Layout Independent)
+      // On ignore si Ctrl est pressé (souvent combiné à Alt sous Windows pour AltGr)
+      if (e.code.startsWith('Digit') && !e.ctrlKey) {
+        const digit = parseInt(e.code.replace('Digit', ''), 10);
+        const keyIndex = digit - 1;
+
+        if (keyIndex >= 0 && keyIndex < categories.length && keyIndex < 9) {
+          if (isInEntityInput) {
+            // Dans le champ de saisie, Alt est OBLIGATOIRE
+            if (e.altKey) {
+              e.preventDefault();
+              e.stopPropagation();
+              setCurrentEntityType(categories[keyIndex].id);
+            }
+          } else {
+            // Hors saisie, le chiffre seul suffit
             e.preventDefault();
+            e.stopPropagation();
             setCurrentEntityType(categories[keyIndex].id);
           }
-        } else {
-          e.preventDefault();
-          setCurrentEntityType(categories[keyIndex].id);
         }
       }
 
       if (e.key === 'Enter') {
-        e.preventDefault();
-        handleAddEntity();
+        // Uniquement dans le champ de saisie ou hors de tout champ
+        if (isInEntityInput || activeEl.tagName === 'BODY') {
+          e.preventDefault();
+          e.stopPropagation();
+          handleAddEntity();
+        }
       }
+
       if (e.key === 'ArrowRight' && !isInEntityInput && currentIndex < entreprises.length - 1) {
         e.preventDefault();
+        e.stopPropagation();
         setCurrentIndex((prev) => prev + 1);
       }
       if (e.key === 'ArrowLeft' && !isInEntityInput && currentIndex > 0) {
         e.preventDefault();
+        e.stopPropagation();
         setCurrentIndex((prev) => prev - 1);
       }
       if (e.key === '?' || (e.shiftKey && e.key === '/')) {
         e.preventDefault();
+        e.stopPropagation();
         setShowHotkeys((h) => !h);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true); // Use capture phase for better control
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [currentIndex, entreprises.length, categories, handleAddEntity, setCurrentIndex]);
 
   // NOUVEAU: Focus Automatique en haut de contenu quand l'index change
@@ -487,8 +500,8 @@ export default function WorkspaceView({
             <button
               onClick={() => setShowHotkeys(!showHotkeys)}
               className={`p-2 rounded-md border transition ${showHotkeys
-                  ? 'bg-red-600 border-red-600 text-white'
-                  : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                ? 'bg-red-600 border-red-600 text-white'
+                : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                 }`}
               title="Raccourcis clavier (?)"
             >
@@ -504,8 +517,8 @@ export default function WorkspaceView({
             <button
               onClick={() => setShowStats(!showStats)}
               className={`p-2 rounded-md border transition relative ${showStats
-                  ? 'bg-red-600 border-red-600 text-white'
-                  : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                ? 'bg-red-600 border-red-600 text-white'
+                : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                 }`}
               title="Tableau de bord"
             >
