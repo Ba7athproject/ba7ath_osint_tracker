@@ -29,7 +29,7 @@ export default function ConfigureView({ csvHeaders, columnMapping, setColumnMapp
                 onChange={(e) => setColumnMapping({ ...columnMapping, [field.key]: e.target.value })}
                 className="w-full border border-slate-300 dark:border-slate-600 rounded-md p-2 bg-slate-50 dark:bg-slate-700 dark:text-white focus:ring-2 focus:ring-red-500 outline-none transition"
               >
-                {csvHeaders.map(h => <option key={`${field.key}-${h}`} value={h}>{h}</option>)}
+                {csvHeaders.map(h => <option key={`${field.key}-${h}`} value={h} className="bg-white dark:bg-slate-700 text-slate-900 dark:text-white">{h}</option>)}
               </select>
             </div>
           ))}

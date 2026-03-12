@@ -100,10 +100,20 @@ export default function WorkspaceView({
   };
 
   const handleTextSelection = () => {
-    const selection = window.getSelection().toString().trim();
-    if (selection && selection.length > 0) {
-      setCurrentEntityName(selection);
-      if (entityInputRef.current) entityInputRef.current.focus();
+    let selection = window.getSelection().toString();
+    
+    if (selection && selection.trim().length > 0) {
+      // Nettoyage: espaces avant/après, virgules, points-virgules, tirets en début/fin, caractères invisibles
+      selection = selection
+        .replace(/^[\s,;."\'\-]+|[\s,;."\'\-]+$/g, '') // Enlever ponctuation début/fin
+        .replace(/[\u200B-\u200D\uFEFF]/g, '') // Enlever zero-width spaces et autres char invisibles
+        .replace(/\s+/g, ' ') // Normaliser espaces multiples en un seul espace
+        .trim();
+
+      if (selection.length > 0) {
+        setCurrentEntityName(selection);
+        if (entityInputRef.current) entityInputRef.current.focus();
+      }
     }
   };
 
@@ -112,12 +122,17 @@ export default function WorkspaceView({
 
     setExtractedEntities(prev => {
       const existing = prev[currentCompany.uuid] || [];
-      if (existing.some(e => e.name === currentEntityName.trim())) return prev;
+      const cleanName = currentEntityName.trim();
+      
+      // Vérification casse-insensible pour éviter les doublons exacts
+      if (existing.some(e => e.name.toLowerCase() === cleanName.toLowerCase())) {
+        return prev;
+      }
 
       return {
         ...prev,
         [currentCompany.uuid]: [...existing, { 
-          name: currentEntityName.trim(), 
+          name: cleanName, 
           type: currentEntityType,
           note: currentEntityNote.trim() || ''
         }]
@@ -232,7 +247,7 @@ export default function WorkspaceView({
               <h3 className="text-2xl font-bold mb-6 pb-4 border-b border-slate-100 dark:border-slate-700">{currentCompany?.name}</h3>
               <div
                 ref={scrollContainerRef}
-                className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed bg-[#fffae6] dark:bg-amber-900/10 p-6 rounded-lg border border-[#ffe066] dark:border-amber-700/50 cursor-text selection:bg-slate-800 selection:text-white max-h-[50vh] overflow-y-auto"
+                className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed bg-[#fffae6] dark:bg-amber-900/10 p-6 rounded-lg border border-[#ffe066] dark:border-amber-700/50 cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 max-h-[50vh] overflow-y-auto"
                 onMouseUp={handleTextSelection}
                 onTouchEnd={handleTextSelection}
                 title="Surlignez du texte ici pour le formulaire"
@@ -277,11 +292,11 @@ export default function WorkspaceView({
                 <select
                   value={currentEntityType}
                   onChange={(e) => setCurrentEntityType(e.target.value)}
-                  className="flex-1 bg-white dark:bg-slate-800 font-medium border border-slate-300 dark:border-slate-600 rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-red-500"
+                  className="flex-1 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border border-slate-300 dark:border-slate-600 rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-red-500"
                 >
-                  <option value="Entreprise">🏢 Entreprise [1]</option>
-                  <option value="Autorite">🛡️ Autorité [2]</option>
-                  <option value="Personne">👤 Personne [3]</option>
+                  <option value="Entreprise" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">🏢 Entreprise [1]</option>
+                  <option value="Autorite" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">🛡️ Autorité [2]</option>
+                  <option value="Personne" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">👤 Personne [3]</option>
                 </select>
                 <button onClick={handleAddEntity} className="bg-slate-800 text-white px-6 py-2 rounded-md font-bold hover:bg-slate-900 transition">Associer [Entrée]</button>
               </div>
@@ -321,10 +336,10 @@ export default function WorkspaceView({
                       <div className={`p-1.5 rounded text-white shrink-0 ${entity.type === 'Autorite' ? 'bg-red-600' : entity.type === 'Personne' ? 'bg-blue-600' : 'bg-slate-700'}`}>
                         {entity.type === 'Autorite' ? <ShieldAlert className="w-3 h-3" /> : entity.type === 'Personne' ? <User className="w-3 h-3" /> : <Building2 className="w-3 h-3" />}
                       </div>
-                      <select value={entity.type} onChange={(e) => handleChangeEntityType(idx, e.target.value)} className="text-xs uppercase tracking-wider font-bold bg-transparent text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1">
-                        <option value="Entreprise">Entreprise</option>
-                        <option value="Autorite">Autorité</option>
-                        <option value="Personne">Personne</option>
+                      <select value={entity.type} onChange={(e) => handleChangeEntityType(idx, e.target.value)} className="text-xs uppercase tracking-wider font-bold bg-transparent dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1">
+                        <option value="Entreprise" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Entreprise</option>
+                        <option value="Autorite" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Autorité</option>
+                        <option value="Personne" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">Personne</option>
                       </select>
                     </div>
                   </li>
