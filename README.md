@@ -26,7 +26,7 @@ Pour exécuter le projet localement, assurez-vous d'avoir installé les outils s
 
 1. **Cloner le dépôt et accéder au répertoire du projet :**
    ```bash
-   git clone <URL_DU_DEPOT>
+   git clone https://github.com/Ba7athproject/ba7ath_osint_tracker.git
    cd ba7ath-tagger
    ```
 
