@@ -148,11 +148,13 @@ export default function ConfigureView({ csvHeaders, columnMapping, setColumnMapp
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center font-sans text-slate-900 dark:text-slate-100 p-6 pt-10 pb-20 transition-colors duration-300">
-      <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-md border border-slate-200 dark:border-slate-700 max-w-2xl w-full">
-        <div className="flex items-center gap-3 mb-6 border-b border-slate-100 dark:border-slate-700 pb-4">
-          <Settings className="text-red-600 dark:text-red-500 w-8 h-8" />
-          <h2 className="text-2xl font-bold dark:text-white">Configuration du Projet</h2>
+    <div className="min-h-screen bg-animated-gradient flex flex-col items-center justify-center font-sans text-slate-900 dark:text-slate-100 p-6 pt-10 pb-20 transition-colors duration-300">
+      <div className="glass-card p-8 rounded-2xl max-w-2xl w-full animate-scale-in">
+        <div className="flex items-center gap-3 mb-6 border-b border-slate-200/50 dark:border-slate-700 pb-4">
+          <div className="w-10 h-10 rounded-xl bg-red-600/10 dark:bg-red-500/15 flex items-center justify-center">
+            <Settings className="text-red-600 dark:text-red-500 w-5 h-5" />
+          </div>
+          <h2 className="text-2xl font-black dark:text-white tracking-tight">Configuration du Projet</h2>
         </div>
 
         {/* Section 1: CSV Mapping */}

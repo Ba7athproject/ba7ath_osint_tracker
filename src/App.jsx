@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useLocalStorage } from './hooks/useLocalStorage';
+import { usePersistentStorage } from './hooks/usePersistentStorage';
 import UploadView from './components/UploadView';
 import ConfigureView from './components/ConfigureView';
 import WorkspaceView from './components/WorkspaceView';
+import { Loader2 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'ba7ath_osint_session_v2';
 
@@ -12,8 +13,8 @@ export default function ManualTagger() {
   const [configStep, setConfigStep] = useState(false);
   const [isCsvLoaded, setIsCsvLoaded] = useState(false);
 
-  // States persistant via le localStorage
-  const [session, setSession, removeSession] = useLocalStorage(LOCAL_STORAGE_KEY, {
+  // States persistant via IndexedDB (Phase 12)
+  const [session, setSession, isSessionLoaded, removeSession] = usePersistentStorage(LOCAL_STORAGE_KEY, {
     entreprises: [],
     extractedEntities: {},
     currentIndex: 0,
@@ -42,8 +43,26 @@ export default function ManualTagger() {
     return () => document.body.removeChild(script);
   }, []);
 
-  // Restaurer depuis la session existante s'il y en a une (v2)
+  // Migration localStorage -> IndexedDB & Restauration
   useEffect(() => {
+    if (!isSessionLoaded) return;
+
+    // Check migration if IndexedDB is empty
+    if (session.entreprises.length === 0) {
+      const oldStore = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (oldStore) {
+        try {
+          const parsed = JSON.parse(oldStore);
+          if (parsed && parsed.entreprises && parsed.entreprises.length > 0) {
+            console.log("Migration de localStorage vers IndexedDB détectée...");
+            setSession(parsed);
+            setIsCsvLoaded(true);
+            return;
+          }
+        } catch(e) { console.error("Erreur migration:", e); }
+      }
+    }
+
     if (!isCsvLoaded && session.entreprises && session.entreprises.length > 0) {
       if (window.confirm("Une session de travail précédente a été trouvée. Voulez-vous la restaurer ?")) {
         setIsCsvLoaded(true);
@@ -52,7 +71,17 @@ export default function ManualTagger() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isSessionLoaded]);
+
+  // Affichage du chargement pendant l'initialisation de la DB
+  if (!isSessionLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4">
+        <Loader2 className="w-12 h-12 text-red-500 animate-spin" />
+        <p className="text-slate-400 font-medium animate-pulse italic">Initialisation du stockage sécurisé...</p>
+      </div>
+    );
+  }
 
   const handleDataParsed = (headers, data, autoMap) => {
     setCsvHeaders(headers);
@@ -113,9 +142,22 @@ export default function ManualTagger() {
     }
   };
 
+  // === SESSION IMPORT (Phase 8) ===
+  const handleSessionImport = (data) => {
+    setSession({
+      entreprises: data.entreprises,
+      extractedEntities: data.extractedEntities,
+      currentIndex: data.currentIndex || 0,
+      categories: data.categories || session.categories,
+      highlightRules: data.highlightRules || session.highlightRules
+    });
+    setIsCsvLoaded(true);
+    setConfigStep(false);
+  };
+
   // Vues conditionnelles (Router simple)
   if (!isCsvLoaded && !configStep) {
-    return <UploadView onDataParsed={handleDataParsed} papaLoaded={papaLoaded} />;
+    return <UploadView onDataParsed={handleDataParsed} papaLoaded={papaLoaded} onSessionImport={handleSessionImport} />;
   }
 
   if (configStep) {

@@ -1,78 +1,118 @@
-# Ba7ath OSINT Tracker - Manual Tagger
+# 🛡️ Ba7ath OSINT Tracker — Manual Tagger
 
-Ba7ath OSINT Tracker est un outil universel d'extraction manuelle (NER - Named Entity Recognition) conçu pour les enquêtes en sources ouvertes (OSINT). Il permet d'importer des jeux de données, d'analyser du texte, et d'extraire rapidement des entités (Entreprises, Autorités, Personnes) avec une interface utilisateur fluide. 
+<p align="center">
+  <strong>Outil universel d'extraction manuelle d'entités nommées (NER) pour les enquêtes en sources ouvertes.</strong><br/>
+  Toutes les données restent privées et ne quittent jamais votre navigateur.
+</p>
 
-Visant la sécurité et la confidentialité, toutes les données traitées via l'application restent strictement locales dans le navigateur de l'utilisateur.
+---
 
-## Fonctionnalités Principales
+## ✨ Fonctionnalités
 
-- **Importation Multi-formats :** Accepte les fichiers classiques `.csv` via PapaParse, ainsi que les tableurs Excel `.xlsx` via SheetJS.
-- **Catégories 100% Personnalisables :** Définissez vos propres types d'entités avec leurs propres couleurs et icônes (par défaut: Entreprise, Autorité, Personne).
-- **Extraction Intelligente :** 
-  - Nettoyage automatique des sélections (suppression des espaces, virgules inutiles, et caractères cachés).
-  - Détection anti-doublon insensible à la casse par source.
-  - Détection automatique Regex des mots contenant des initiales majuscules latines et cyrilliques.
-- **Raccourcis Clavier (Hotkeys) :** Optimisez votre temps de qualification en utilisant `1`, `2`, `3`... (mapping automatique selon vos catégories) pour sélectionner le type de l'entité, et `Entrée` pour la valider.
-- **Qualificateur de Context (Note) :** Un champ optionnel de Notes pour expliquer brièvement *pourquoi* une cible a été rattachée (ex: "actionnaire majoritaire de XYZ").
-- **Moteur de Recherche Intégrée :** Barre de recherche rapide dynamique pour investiguer et retrouver instantanément un terme précis parmi un document (par ID ou Nom).
-- **Mode Sombre Natif :** Bouton de la barre d'outils (Toggling) pour basculer en mode sombre, avec adaptation dynamique des contrastes de sélection de texte.
-- **Sauvegarde et Auto-focus :** Sauvegarde transparente de la session et des catégories dans le Local Storage, auto-focus intuitif lors de la sélection du texte à analyser, et retour ascendant du document à chaque chargement de la source suivante.
-- **Architecture Maintenable :** Code refactorisé en de multiples composants React (`UploadView`, `WorkspaceView`, `ConfigureView`) exploitant le hook personnalisé `useLocalStorage`.
+### 📥 Importation Multi-formats
+- **CSV** via PapaParse et **Excel (.xlsx)** via SheetJS — lecture 100% côté client.
+- Auto-détection intelligente des colonnes (ID, Titre, Texte).
 
-## Prérequis
+### ⚙️ Configuration Avancée
+- **Catégories 100% personnalisables** : définissez vos propres types d'entités avec couleurs et icônes.
+- **Support de multiples colonnes de texte** : affichage simultané de plusieurs paragraphes sources.
+- **Métadonnées dynamiques** : affichage sélectif du contexte (ID, uuid, colonnes CSV).
+- **Règles de détection visuelle** : surlignage automatique des majuscules, acronymes et structures juridiques (support latin + cyrillique).
 
-Pour exécuter le projet localement, assurez-vous d'avoir installé les outils suivants sur votre environnement :
+### 🏷️ Extraction & OSINT
+- **Moteur Regex Optmisé** : détection mémorisée des entités potentielles pour une fluidité maximale.
+- **Saisie assistée** : suggestions en temps réel des entités déjà extraites pour éviter les doublons.
+- **Nettoyage automatique** : suppression des caractères invisibles et ponctuations parasites lors de la sélection.
+- **Audit de Qualité** : détection automatique des variantes (ex: "TOTAL" vs "Total") avec **fusion intelligente en un clic**.
 
-- [Node.js](https://nodejs.org/) (Version 16.0 ou supérieure recommandée)
-- npm (Généralement inclus avec Node.js) ou yarn / pnpm
+### 💾 Persistance & Robustesse
+- **Stockage IndexedDB** : utilisation de `localforage` pour gérer des sessions massives sans limite de taille.
+- **Restauration auto** : reprise immédiate après fermeture de l'onglet ou crash navigateur.
+- **Virtualisation intelligente** : découpage des longs textes en blocs gérables pour préserver les performances.
 
-## Installation et Lancement
+### 📊 Tableau de Bord
+- Couverture de la tâche en temps réel (Donut Chart).
+- Top 10 des cibles les plus fréquentes.
+- Distribution par catégorie d'entité.
 
-1. **Cloner le dépôt et accéder au répertoire du projet :**
-   ```bash
-   git clone https://github.com/Ba7athproject/ba7ath_osint_tracker.git
-   cd ba7ath-tagger
-   ```
+### 📤 Exportation & Collaboration
+- **Multi-format** : CSV (plat/groupé), JSON NER (format d'entraînement), et Graphes de réseau (Gephi, Neo4J).
+- **Session Portable** : export complet de l'état de travail pour partage immédiat avec un collègue.
 
-2. **Installer les dépendances :**
-   ```bash
-   npm install
-   ```
+### ⌨️ Raccourcis Clavier
+| Touche | Action |
+|--------|--------|
+| `←` / `→` | Navigation entre sources |
+| `Entrée` | Validation de l'entité |
+| `1` - `9` | Changement de catégorie (utilisez **Alt + Chiffre** si le focus est dans le champ nom) |
+| `?` | Aide interactive |
 
-3. **Démarrer le serveur de développement :**
-   ```bash
-   npm run dev
-   ```
+---
 
-4. Ouvrez votre navigateur et accédez à l'URL locale (généralement `http://localhost:5173/`).
+## 🛠️ Prérequis
 
-## Utilisation
+- [Node.js](https://nodejs.org/) ≥ 16.0
+- npm (inclus avec Node.js) ou yarn / pnpm
 
-1. **Chargement des Données :** À l'ouverture de l'application, importez un fichier `.csv` contenant les données à analyser.
-2. **Configuration :** 
-   - Mappez les colonnes de votre fichier avec l'Identifiant (ID/UUID), le Nom/Titre, et le Texte.
-   - Ajoutez, personnalisez (icônes et couleurs) ou supprimez vos propres catégories d'entités de recherche.
-3. **Analyse et Annotation :** Lisez les textes affichés à l'écran. Sélectionnez les entités pertinentes à l'aide de votre souris. Le texte est automatiquement nettoyé.
-4. **Catégorisation :** Choisissez la catégorie correspondante (via la liste déroulante ou les touches `1`, `2`, `3`...) et validez. L'outil vous empêchera silencieusement d'ajouter des doublons.
-5. **Exportation :** Une fois le jeu de données analysé, exportez vos résultats via le bouton "Exporter CSV" situé en haut à droite.
+## 🚀 Installation et Lancement
 
-## Technologies Utilisées
+```bash
+# 1. Cloner le dépôt
+git clone https://github.com/Ba7athproject/ba7ath_osint_tracker.git
+cd ba7ath-tagger
 
-- **React / Vite :** Base du frontend, assurant rapidité de développement et fluidité.
-- **Tailwind CSS v4 :** Pour la gestion native des classes utilitaires en mode Light/Dark de manière réactive.
-- **PapaParse & SheetJS (xlsx) :** Bibliothèques JavaScript de référence pour assurer la lecture des bases CSV et des classeurs Excel purement côté client.
-- **Lucide React :** Pack d'icônes vectorielles légères et élégantes pour concevoir des IHM métier de qualité.
+# 2. Installer les dépendances
+npm install
 
-## Contribution
+# 3. Démarrer le serveur de développement
+npm run dev
+```
 
-Les contributions sont les bienvenues ! Si vous souhaitez améliorer ce projet ou ajouter de nouvelles fonctionnalités, n'hésitez pas à :
+Ouvrez votre navigateur à l'URL locale (par défaut : `http://localhost:5173/`).
 
-1. Créer un *Fork* du projet.
-2. Créer une branche spécifique à votre fonctionnalité (`git checkout -b feature/NouvelleFonctionnalite`).
-3. Faire un *Commit* de vos modifications (`git commit -m 'Ajout d'une nouvelle fonctionnalité'`).
-4. Faire un *Push* sur la branche (`git push origin feature/NouvelleFonctionnalite`).
-5. Ouvrir une *Pull Request*.
+## 📖 Utilisation
 
-## Licence
+1. **Chargement** — Importez un fichier CSV/Excel, ou reprenez une session existante (.json).
+2. **Configuration** — Mappez les colonnes (ID, textes multiples, métadonnées), personnalisez vos catégories, et activez les règles de surbrillance.
+3. **Analyse** — Lisez les textes, sélectionnez les entités pertinentes à la souris. Utilisez les raccourcis clavier pour accélérer le workflow.
+4. **Review** — Consultez le tableau de bord pour suivre la progression, repérer les doublons, et identifier les entités les plus fréquentes.
+5. **Export** — Exportez vos résultats (CSV plat, groupé, JSON NER, ou réseau), ou sauvegardez votre session complète pour la partager.
 
-Ce projet est sous licence MIT - voir le fichier [LICENSE](./LICENSE) pour plus de détails.
+## 🏗️ Architecture
+
+```
+ba7ath-tagger/
+├── src/
+│   ├── hooks/
+│   │   └── usePersistentStorage.js  # Moteur IndexedDB (localforage)
+│   ├── components/
+│   │   ├── WorkspaceView.jsx   # Logique virtuelle & Regex OSINT
+│   │   ├── StatsPanel.jsx      # Audit & Fusion de données
+│   │   └── ...
+│   └── index.css               # Design System v4 & Dark Mode
+└── ...
+```
+
+## 🧰 Technologies
+
+| Technologie | Usage |
+|---|---|
+| **React + Vite** | Frontend rapide et modulaire |
+| **Tailwind CSS v4** | Classes utilitaires, mode sombre natif |
+| **localforage** | Stockage IndexedDB asynchrone |
+| **PapaParse** | Lecture CSV côté client |
+| **SheetJS (xlsx)** | Lecture Excel côté client |
+| **Lucide React** | Icônes vectorielles légères |
+| **Tauri** | Packaging desktop (optionnel) |
+
+## 🤝 Contribution
+
+1. *Fork* du projet
+2. Branche feature : `git checkout -b feature/NomFeature`
+3. Commit : `git commit -m 'Ajout feature'`
+4. Push : `git push origin feature/NomFeature`
+5. *Pull Request*
+
+## 📄 Licence
+
+Ce projet est sous licence **MIT** — voir [LICENSE](./LICENSE).
