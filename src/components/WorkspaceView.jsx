@@ -134,6 +134,7 @@ export default function WorkspaceView({
     }
   };
 
+
   // NOUVEAU: Moteur de recherche global simple
   useEffect(() => {
     if (!searchQuery) {
@@ -185,10 +186,11 @@ export default function WorkspaceView({
     const allEntities = Object.values(extractedEntities).flat();
     const nameMap = {};
     allEntities.forEach(e => {
-      // Normalisation plus stricte : trim + minuscule + suppression des doubles espaces
+      // Normalisation pour le regroupement : trim + minuscule + suppression des doubles espaces
       const normalized = e.name.toLowerCase().trim().replace(/\s+/g, ' ');
       if (!nameMap[normalized]) nameMap[normalized] = new Set();
-      nameMap[normalized].add(e.name.trim());
+      // On garde le nom tel quel pour détecter les variantes de casse/espaces
+      nameMap[normalized].add(e.name);
     });
     // On compte le nombre de groupes qui ont plus d'une variante de nom
     return Object.values(nameMap).filter(variants => variants.size > 1).length;
@@ -225,9 +227,34 @@ export default function WorkspaceView({
     if (entityInputRef.current) entityInputRef.current.focus();
   }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, setExtractedEntities]);
 
+  // === REFS POUR LES HOTKEYS (Phase 3.0 - Stabilisation) ===
+  const handleAddEntityRef = useRef(handleAddEntity);
+  const categoriesRef = useRef(categories);
+  const currentIndexRef = useRef(currentIndex);
+  const entreprisesRef = useRef(entreprises);
+  const currentEntityTypeRef = useRef(currentEntityType);
 
-  // Raccourcis Clavier (Hotkeys) - CORRIGÉS POUR L'OSINT (Layout Independent)
+  useEffect(() => { handleAddEntityRef.current = handleAddEntity; }, [handleAddEntity]);
+  useEffect(() => { categoriesRef.current = categories; }, [categories]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+  useEffect(() => { entreprisesRef.current = entreprises; }, [entreprises]);
+  useEffect(() => { currentEntityTypeRef.current = currentEntityType; }, [currentEntityType]);
+
+  // Raccourcis Clavier (Hotkeys) - FIX 3.0 (Anti-Alt-Codes & Stable)
   useEffect(() => {
+    const blockAltCode = (e) => {
+      const activeEl = document.activeElement;
+      const isInEntityInput = activeEl === entityInputRef.current;
+      
+      if (isInEntityInput && e.altKey) {
+        const isDigit = e.code.startsWith('Digit') || e.code.startsWith('Numpad') || /^[0-9]$/.test(e.key);
+        if (isDigit) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }
+    };
+
     const handleKeyDown = (e) => {
       const activeEl = document.activeElement;
       if (!activeEl) return;
@@ -237,61 +264,75 @@ export default function WorkspaceView({
       const isInSelect = activeEl.tagName === 'SELECT';
       const isInEntityInput = activeEl === entityInputRef.current;
 
-      // Bloquer tous les raccourcis dans recherche, textarea, select
       if (isInSearch || isInTextArea || isInSelect) return;
 
-      // Gestion des chiffres 1-9 via Digit1...Digit9 (Layout Independent)
-      // On ignore si Ctrl est pressé (souvent combiné à Alt sous Windows pour AltGr)
-      if (e.code.startsWith('Digit') && !e.ctrlKey) {
-        const digit = parseInt(e.code.replace('Digit', ''), 10);
-        const keyIndex = digit - 1;
+      let digit = null;
+      const digitMatch = e.code.match(/^(?:Digit|Numpad)([1-9])$/);
+      if (digitMatch) {
+        digit = parseInt(digitMatch[1], 10);
+      } else if (!e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+        digit = parseInt(e.key, 10);
+      }
 
-        if (keyIndex >= 0 && keyIndex < categories.length && keyIndex < 9) {
+      if (digit !== null && !e.ctrlKey) {
+        const keyIndex = digit - 1;
+        const cats = categoriesRef.current;
+        
+        if (keyIndex >= 0 && keyIndex < cats.length && keyIndex < 9) {
           if (isInEntityInput) {
-            // Dans le champ de saisie, Alt est OBLIGATOIRE
             if (e.altKey) {
               e.preventDefault();
-              e.stopPropagation();
-              setCurrentEntityType(categories[keyIndex].id);
+              e.stopImmediatePropagation();
+              setCurrentEntityType(cats[keyIndex].id);
+              return;
             }
           } else {
-            // Hors saisie, le chiffre seul suffit
             e.preventDefault();
-            e.stopPropagation();
-            setCurrentEntityType(categories[keyIndex].id);
+            e.stopImmediatePropagation();
+            setCurrentEntityType(cats[keyIndex].id);
+            return;
           }
         }
       }
 
       if (e.key === 'Enter') {
-        // Uniquement dans le champ de saisie ou hors de tout champ
-        if (isInEntityInput || activeEl.tagName === 'BODY') {
+        const isBodyOrWorkspace = activeEl.tagName === 'BODY' || activeEl.closest('.workspace-container');
+        if (isInEntityInput || isBodyOrWorkspace) {
           e.preventDefault();
-          e.stopPropagation();
-          handleAddEntity();
+          e.stopImmediatePropagation();
+          handleAddEntityRef.current();
         }
       }
 
-      if (e.key === 'ArrowRight' && !isInEntityInput && currentIndex < entreprises.length - 1) {
-        e.preventDefault();
-        e.stopPropagation();
-        setCurrentIndex((prev) => prev + 1);
-      }
-      if (e.key === 'ArrowLeft' && !isInEntityInput && currentIndex > 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        setCurrentIndex((prev) => prev - 1);
-      }
-      if (e.key === '?' || (e.shiftKey && e.key === '/')) {
-        e.preventDefault();
-        e.stopPropagation();
-        setShowHotkeys((h) => !h);
+      if (!isInEntityInput && !isInTextArea) {
+        if (e.key === 'ArrowRight' && currentIndexRef.current < entreprisesRef.current.length - 1) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          setCurrentIndex((prev) => prev + 1);
+        }
+        if (e.key === 'ArrowLeft' && currentIndexRef.current > 0) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          setCurrentIndex((prev) => prev - 1);
+        }
+        if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          setShowHotkeys((h) => !h);
+        }
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown, true); // Use capture phase for better control
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [currentIndex, entreprises.length, categories, handleAddEntity, setCurrentIndex]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', blockAltCode, true);
+    window.addEventListener('keypress', blockAltCode, true);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', blockAltCode, true);
+      window.removeEventListener('keypress', blockAltCode, true);
+    };
+  }, []);
 
   // NOUVEAU: Focus Automatique en haut de contenu quand l'index change
   useEffect(() => {
@@ -357,6 +398,7 @@ export default function WorkspaceView({
       selection = selection
         .replace(/^[\s,;."'-]+|[\s,;."'-]+$/g, '')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/[\x00-\x1F\u263A\u263B\u2665\u2666\u2663\u2660\u2022\u25D8\u25CB\u25D9\u2642\u2640\u266A\u266B\u263C\u25BA\u25C4\u2115\u203C\u00B6\u00A7\u25AC\u21A8\u2191\u2193\u2192\u2190\u221F\u2194\u25B2\u25BC]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -702,7 +744,10 @@ export default function WorkspaceView({
                   ref={entityInputRef}
                   type="text"
                   value={currentEntityName}
-                  onChange={(e) => setCurrentEntityName(e.target.value)}
+                  onChange={(e) => {
+                    const sanitized = e.target.value.replace(/[\x00-\x1F\u263A\u263B\u2665\u2666\u2663\u2660\u2022\u25D8\u25CB\u25D9\u2642\u2640\u266A\u266B\u263C\u25BA\u25C4\u2115\u203C\u00B6\u00A7\u25AC\u21A8\u2191\u2193\u2192\u2190\u221F\u2194\u25B2\u25BC]/g, '');
+                    setCurrentEntityName(sanitized);
+                  }}
                   placeholder="Nom de l'entité..."
                   className="w-full px-4 py-3 text-lg font-medium border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 focus:ring-2 focus:ring-red-500 outline-none"
                 />
