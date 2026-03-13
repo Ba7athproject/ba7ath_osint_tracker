@@ -76,9 +76,15 @@ export default function ManualTagger() {
   // Affichage du chargement pendant l'initialisation de la DB
   if (!isSessionLoaded) {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4">
-        <Loader2 className="w-12 h-12 text-red-500 animate-spin" />
-        <p className="text-slate-400 font-medium animate-pulse italic">Initialisation du stockage sécurisé...</p>
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-6">
+        <div className="relative">
+          <img src="/app-icon.png" alt="Ba7ath Logo" className="w-24 h-24 object-contain animate-pulse" />
+          <div className="absolute inset-0 rounded-full border-4 border-red-500/20 border-t-red-500 animate-spin"></div>
+        </div>
+        <div className="text-center">
+          <h1 className="text-white text-2xl font-black tracking-tighter mb-1">BA7ATH <span className="text-red-500">OSINT</span> TRACKER</h1>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-[0.2em]">v1.3 — Initialisation...</p>
+        </div>
       </div>
     );
   }

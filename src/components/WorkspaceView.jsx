@@ -649,11 +649,18 @@ export default function WorkspaceView({
         {/* HEADER FIXE */}
         <div className="w-full max-w-6xl mb-6 sticky top-0 z-50 glass-card rounded-xl px-5 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 animate-fade-in-up">
           <div>
-            <h1 className="text-2xl font-black flex items-center gap-2 tracking-tight">
-              <ShieldAlert className="text-red-600 dark:text-red-500 w-6 h-6" />
-              Ba7ath <span className="text-red-600">OSINT</span>
-            </h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+            <div className="flex items-center gap-3">
+              <img src="/app-icon.png" alt="Logo" className="w-10 h-10 object-contain drop-shadow-md" />
+              <div>
+                <h1 className="text-xl font-black flex items-center gap-2 tracking-tight leading-none uppercase">
+                  BA7ATH <span className="text-red-600">OSINT</span> TRACKER
+                </h1>
+                <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.2em] mt-1">
+                  v1.3 — Professional Edition
+                </p>
+              </div>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 text-xs mt-2 ml-13 font-medium">
               Progression : {Object.keys(extractedEntities).length} traitées sur{' '}
               {entreprises.length}
             </p>
