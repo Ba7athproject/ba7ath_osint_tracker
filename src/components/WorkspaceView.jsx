@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X } from 'lucide-react';
+import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X, Settings } from 'lucide-react';
 
 import ExportModal from './ExportModal';
 import StatsPanel from './StatsPanel';
@@ -12,6 +12,21 @@ const DEFAULT_HIGHLIGHT_RULES = { capitals: true, acronyms: false, legal: false 
 
 const availableIcons = {
   Tag, Building2, ShieldAlert, User, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText
+};
+
+const normalizeEntityName = (name) => {
+  if (!name) return '';
+  const noiseWords = new Set(['the', 'of', 'and', 'a', 'an', 'in', 'on', 'at', 'for', 'with', 'by']);
+  
+  return name
+    .toLowerCase()
+    .trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[.,;:"'!?(){}[\]]/g, ' ') // Replace punctuation with space
+    .split(/\s+/)
+    .filter(token => token.length > 0 && !noiseWords.has(token))
+    .sort()
+    .join(' ');
 };
 
 const LazyTextChunk = ({ content, renderFn }) => {
@@ -58,7 +73,8 @@ export default function WorkspaceView({
   setExtractedEntities,
   categories = EMPTY_ARRAY,
   highlightRules = DEFAULT_HIGHLIGHT_RULES,
-  resetSession
+  resetSession,
+  onOpenConfig
 }) {
   const currentCompany = entreprises[currentIndex];
 
@@ -103,26 +119,25 @@ export default function WorkspaceView({
   const [showHotkeys, setShowHotkeys] = useState(false);
 
   const [currentEntityName, setCurrentEntityName] = useState('');
-  // Use the first category as the default type, fallback to a string if categories is empty (shouldn't happen)
   const defaultCategoryId = categories.length > 0 ? categories[0].id : 'Entreprise';
   const [currentEntityType, setCurrentEntityType] = useState(defaultCategoryId);
-  const [currentEntityNote, setCurrentEntityNote] = useState(''); // NOUVEAU: Champ Note
+  const [currentEntityNote, setCurrentEntityNote] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  
+  const [pendingConflict, setPendingConflict] = useState(null);
 
   const [isDarkMode, setIsDarkMode] = useState(false);
   const entityInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
 
-  // Initialize Dark Mode correctly
   useEffect(() => {
     if (typeof document !== 'undefined') {
       setIsDarkMode(document.documentElement.classList.contains('dark'));
     }
   }, []);
 
-  // Toggle Dark Mode
   const toggleDarkMode = () => {
     if (typeof document === 'undefined') return;
     if (isDarkMode) {
@@ -135,7 +150,6 @@ export default function WorkspaceView({
   };
 
 
-  // NOUVEAU: Moteur de recherche global simple
   useEffect(() => {
     if (!searchQuery) {
       setSearchResults(prev => prev.length === 0 ? prev : []);
@@ -156,62 +170,123 @@ export default function WorkspaceView({
     setSearchResults(results);
   }, [searchQuery, entreprises]);
 
-  // === SUGGESTIONS D'ENTITÉS (Phase 7 — Dedup) ===
   const entitySuggestions = useMemo(() => {
     if (!currentEntityName || currentEntityName.trim().length < 2) return [];
     const input = currentEntityName.trim().toLowerCase();
     const inputRaw = currentEntityName.trim();
+    const inputNorm = normalizeEntityName(inputRaw);
 
-    // Collecter toutes les entités uniques
     const allNames = new Set();
     Object.values(extractedEntities).forEach((arr) => {
       arr.forEach((e) => allNames.add(e.name));
     });
 
-    // Filtrer les noms similaires
     return Array.from(allNames)
       .filter((name) => {
         const lower = name.toLowerCase();
-        // Suggérer si inclu (ou incluant) OU si c'est le même mot mais avec une casse différente
-        if (lower === input) {
-          return name !== inputRaw; // C'est une variante ! (ex: "TOTAL" vs "total")
-        }
+        const norm = normalizeEntityName(name);
+        
+        if (lower === input) return name !== inputRaw;
+        if (norm === inputNorm && inputNorm.length > 0) return name !== inputRaw;
+        
         return lower.includes(input) || input.includes(lower);
       })
       .slice(0, 5);
   }, [currentEntityName, extractedEntities]);
 
-  // === CALCUL DES CONFLITS (Header Badge) ===
   const totalConflictCount = useMemo(() => {
     const allEntities = Object.values(extractedEntities).flat();
     const nameMap = {};
     allEntities.forEach(e => {
-      // Normalisation pour le regroupement : trim + minuscule + suppression des doubles espaces
-      const normalized = e.name.toLowerCase().trim().replace(/\s+/g, ' ');
+      const normalized = normalizeEntityName(e.name);
+      if (!normalized) return;
       if (!nameMap[normalized]) nameMap[normalized] = new Set();
-      // On garde le nom tel quel pour détecter les variantes de casse/espaces
       nameMap[normalized].add(e.name);
     });
-    // On compte le nombre de groupes qui ont plus d'une variante de nom
     return Object.values(nameMap).filter(variants => variants.size > 1).length;
   }, [extractedEntities]);
 
-  const handleAddEntity = useCallback(() => {
+  const currentDocDuplicates = useMemo(() => {
+    if (!currentCompany || !extractedEntities[currentCompany.uuid]) return new Set();
+    const entities = extractedEntities[currentCompany.uuid];
+    const counts = {};
+    entities.forEach(e => {
+      const norm = normalizeEntityName(e.name);
+      if (!norm) return;
+      counts[norm] = (counts[norm] || 0) + 1;
+    });
+    const dupes = new Set();
+    Object.entries(counts).forEach(([norm, count]) => {
+      if (count > 1) dupes.add(norm);
+    });
+    return dupes;
+  }, [currentCompany, extractedEntities]);
+
+  const isCurrentInputDuplicate = useMemo(() => {
+    if (!currentEntityName.trim() || !currentCompany) return false;
+    const normInput = normalizeEntityName(currentEntityName.trim());
+    if (!normInput) return false;
+    const existing = extractedEntities[currentCompany.uuid] || [];
+    return existing.some(e => normalizeEntityName(e.name) === normInput);
+  }, [currentEntityName, currentCompany, extractedEntities]);
+
+  const handleAddEntity = useCallback((force = false) => {
     if (!currentEntityName.trim() || !currentCompany) return;
 
-    setExtractedEntities((prev) => {
-      const cleanName = currentEntityName.trim();
-      const existing = prev[currentCompany.uuid] || [];
+    const cleanName = currentEntityName.trim();
+    const normalizedClean = normalizeEntityName(cleanName);
 
-      // Vérification casse-insensible pour éviter les doublons exacts
-      if (existing.some((e) => e.name.toLowerCase() === cleanName.toLowerCase())) {
-        return prev;
+    // --- PHASE 1: LOCAL SCAN (Current record) ---
+    const existingInDoc = extractedEntities[currentCompany.uuid] || [];
+    const localConflict = existingInDoc.find((e) => normalizeEntityName(e.name) === normalizedClean);
+
+    if (localConflict && !force) {
+      setPendingConflict({
+        newName: cleanName,
+        existingEntity: localConflict,
+        type: currentEntityType,
+        note: currentEntityNote.trim() || '',
+        scope: 'local',
+        origin: 'Cet enregistrement'
+      });
+      return;
+    }
+
+    // --- PHASE 2: GLOBAL SCAN (Rest of the project) ---
+    // We only check globally if we are not forcing and there's no local conflict
+    if (!force) {
+      const globalMatch = Object.entries(extractedEntities).find(([uuid, entities]) => {
+        if (uuid === currentCompany.uuid) return false;
+        return entities.some(e => normalizeEntityName(e.name) === normalizedClean);
+      });
+
+      if (globalMatch) {
+        const [originUuid, entities] = globalMatch;
+        const globalConflict = entities.find(e => normalizeEntityName(e.name) === normalizedClean);
+        
+        // PER USER REQUEST: Inutile de signaler en cas de similitude 100% au niveau global
+        const isExactMatch = globalConflict.name === cleanName;
+        
+        if (!isExactMatch) {
+          setPendingConflict({
+            newName: cleanName,
+            existingEntity: globalConflict,
+            type: currentEntityType,
+            note: currentEntityNote.trim() || '',
+            scope: 'global',
+            origin: originUuid
+          });
+          return;
+        }
       }
+    }
 
+    setExtractedEntities((prev) => {
+      const currentList = prev[currentCompany.uuid] || [];
       return {
         ...prev,
         [currentCompany.uuid]: [
-          ...existing,
+          ...currentList,
           {
             name: cleanName,
             type: currentEntityType,
@@ -223,11 +298,55 @@ export default function WorkspaceView({
 
     setCurrentEntityName('');
     setCurrentEntityNote('');
-    // Focus auto back to entity input for fast tagging
     if (entityInputRef.current) entityInputRef.current.focus();
-  }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, setExtractedEntities]);
+  }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, extractedEntities, setExtractedEntities]);
 
-  // === REFS POUR LES HOTKEYS (Phase 3.0 - Stabilisation) ===
+  const handleResolveConflict = (resolution) => {
+    if (!pendingConflict || !currentCompany) return;
+
+    const { newName, existingEntity, type, note, scope } = pendingConflict;
+
+    setExtractedEntities((prev) => {
+      const existingInDoc = [...(prev[currentCompany.uuid] || [])];
+      const normOld = normalizeEntityName(existingEntity.name);
+      
+      if (resolution === 'merge-keep-old') {
+        const alreadyInDoc = existingInDoc.some(e => normalizeEntityName(e.name) === normOld);
+        if (!alreadyInDoc) {
+          existingInDoc.push({ ...existingEntity });
+        }
+      } else if (resolution === 'merge-keep-new') {
+        const idx = existingInDoc.findIndex(e => normalizeEntityName(e.name) === normOld);
+        if (idx !== -1) {
+          existingInDoc[idx] = { ...existingInDoc[idx], name: newName, type, note };
+        } else {
+          existingInDoc.push({ name: newName, type, note });
+        }
+      } else if (resolution === 'keep-both') {
+        existingInDoc.push({ name: newName, type, note, isDuplicateIntentional: true });
+      }
+
+      return {
+        ...prev,
+        [currentCompany.uuid]: existingInDoc
+      };
+    });
+
+    setPendingConflict(null);
+    
+    // Check for global conflicts only if we chose "keep-both" in a local context
+    if (resolution === 'keep-both' && scope === 'local') {
+      // Re-trigger handleAddEntity with force=true to skip local check but check global?
+      // Actually, handleAddEntity(true) will just add it.
+      // Better: trigger a manual check or let handleAddEntity handle it.
+      // For now, let's keep it simple: if local is resolved, we are done.
+    }
+
+    setCurrentEntityName('');
+    setCurrentEntityNote('');
+    if (entityInputRef.current) entityInputRef.current.focus();
+  };
+
   const handleAddEntityRef = useRef(handleAddEntity);
   const categoriesRef = useRef(categories);
   const currentIndexRef = useRef(currentIndex);
@@ -240,7 +359,6 @@ export default function WorkspaceView({
   useEffect(() => { entreprisesRef.current = entreprises; }, [entreprises]);
   useEffect(() => { currentEntityTypeRef.current = currentEntityType; }, [currentEntityType]);
 
-  // Raccourcis Clavier (Hotkeys) - FIX 3.0 (Anti-Alt-Codes & Stable)
   useEffect(() => {
     const blockAltCode = (e) => {
       const activeEl = document.activeElement;
@@ -332,17 +450,14 @@ export default function WorkspaceView({
       window.removeEventListener('keyup', blockAltCode, true);
       window.removeEventListener('keypress', blockAltCode, true);
     };
-  }, []);
+  }, [setCurrentIndex, setShowHotkeys]);
 
-  // NOUVEAU: Focus Automatique en haut de contenu quand l'index change
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [currentIndex]);
 
-  // Moteur de Regex OSINT (Mémorisé pour la performance)
-  // On ne recompile la Regex que si les règles changent, pas à chaque paragraphe
   const highlightRegexInfo = useMemo(() => {
     const regexParts = [];
     if (highlightRules.legal)
@@ -394,7 +509,6 @@ export default function WorkspaceView({
     let selection = window.getSelection()?.toString() || '';
 
     if (selection && selection.trim().length > 0) {
-      // Nettoyage: espaces avant/après, virgules, points-virgules, tirets en début/fin, caractères invisibles
       selection = selection
         .replace(/^[\s,;."'-]+|[\s,;."'-]+$/g, '')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -452,7 +566,6 @@ export default function WorkspaceView({
     }
   };
 
-  // === EXPORT SESSION (Phase 8) ===
   const handleExportSession = () => {
     const sessionData = {
       _type: 'ba7ath-session',
@@ -490,7 +603,6 @@ export default function WorkspaceView({
             </p>
           </div>
 
-          {/* Barre de Recherche Rapide */}
           <div className="relative flex-1 min-w-[200px] max-w-md group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-red-500 transition-colors" />
             <input
@@ -506,9 +618,6 @@ export default function WorkspaceView({
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                     Résultats ({searchResults.length})
                   </span>
-                  {searchResults.length >= 100 && (
-                    <span className="text-[10px] text-amber-500 font-medium">Top 100</span>
-                  )}
                 </div>
                 {searchResults.map((result) => (
                   <button
@@ -545,14 +654,19 @@ export default function WorkspaceView({
                 ? 'bg-red-600 border-red-600 text-white'
                 : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                 }`}
-              title="Raccourcis clavier (?)"
             >
               <Keyboard className="w-5 h-5" />
             </button>
             <button
+              onClick={onOpenConfig}
+              className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-2 rounded-md text-sm font-medium transition"
+              title="Configuration du projet"
+            >
+              <Settings className="w-4 h-4" /> <span className="hidden sm:inline">Config</span>
+            </button>
+            <button
               onClick={resetSession}
               className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-600 dark:text-slate-300 px-3 py-2 rounded-md text-sm font-medium transition"
-              title="Effacer la mémoire"
             >
               <Trash2 className="w-4 h-4" /> <span className="hidden sm:inline">Réinit</span>
             </button>
@@ -562,7 +676,6 @@ export default function WorkspaceView({
                 ? 'bg-red-600 border-red-600 text-white'
                 : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                 }`}
-              title="Tableau de bord"
             >
               <BarChart3 className="w-5 h-5" />
               {totalConflictCount > 0 && (
@@ -577,7 +690,6 @@ export default function WorkspaceView({
             <button
               onClick={handleExportSession}
               className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-sm font-medium transition shadow-sm"
-              title="Sauvegarder la session complète"
             >
               <FolderDown className="w-4 h-4" /> <span className="hidden sm:inline">Session</span>
             </button>
@@ -618,10 +730,7 @@ export default function WorkspaceView({
           />
         )}
 
-        <div
-          className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-6 items-start animate-fade-in-up"
-          style={{ animationDelay: '200ms' }}
-        >
+        <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-6 items-start animate-fade-in-up" style={{ animationDelay: '200ms' }}>
           {/* PANNEAU GAUCHE */}
           <div className="lg:col-span-7 flex flex-col gap-4">
             <div className="glass-card rounded-xl overflow-hidden">
@@ -635,74 +744,43 @@ export default function WorkspaceView({
               </div>
 
               <div className="p-6">
-                {currentCompany?.metadata &&
-                  Object.keys(currentCompany.metadata).length > 0 && (
-                    <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-b border-slate-100 dark:border-slate-700 pb-6">
-                      {Object.entries(currentCompany.metadata).map(([key, value]) => (
-                        <div
-                          key={key}
-                          className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-200 dark:border-slate-700"
-                        >
-                          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">
-                            {key}
-                          </p>
-                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100 wrap-break-word px-1">
-                            {value ? (
-                              String(value)
-                            ) : (
-                              <span className="italic text-slate-400">Non renseigné</span>
-                            )}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                {currentCompany?.metadata && Object.keys(currentCompany.metadata).length > 0 && (
+                  <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-b border-slate-100 dark:border-slate-700 pb-6">
+                    {Object.entries(currentCompany.metadata).map(([key, value]) => (
+                      <div key={key} className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">{key}</p>
+                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100 wrap-break-word px-1">{value ? String(value) : <span className="italic text-slate-400">Non renseigné</span>}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div
                   ref={scrollContainerRef}
                   className="flex flex-col gap-6 max-h-[50vh] overflow-y-auto pr-2"
                   onMouseUp={handleTextSelection}
                   onTouchEnd={handleTextSelection}
-                  title="Surlignez du texte ici pour le formulaire"
                 >
-                  {currentCompany?.texts &&
-                    currentCompany.texts.map((textBlock, idx) => (
-                      <div
-                        key={idx}
-                        className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative"
-                      >
-                        <div className="absolute top-0 left-0 bg-[#ffe066] dark:bg-amber-700 text-amber-900 dark:text-amber-100 text-xs font-bold px-3 py-1 rounded-br-lg rounded-tl-lg shadow-sm">
-                          {textBlock.title}
-                        </div>
-                        <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4 h-full">
-                          {splitIntoParagraphs(textBlock.content).map((para, cIdx) => (
-                            <LazyTextChunk
-                              key={cIdx}
-                              content={para}
-                              renderFn={renderHighlightedText}
-                            />
-                          ))}
-                        </div>
+                  {currentCompany?.texts && currentCompany.texts.map((textBlock, idx) => (
+                    <div key={idx} className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
+                      <div className="absolute top-0 left-0 bg-[#ffe066] dark:bg-amber-700 text-amber-900 dark:text-amber-100 text-xs font-bold px-3 py-1 rounded-br-lg rounded-tl-lg shadow-sm">
+                        {textBlock.title}
                       </div>
-                    ))}
+                      <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4 h-full">
+                        {splitIntoParagraphs(textBlock.content).map((para, cIdx) => (
+                          <LazyTextChunk key={cIdx} content={para} renderFn={renderHighlightedText} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
 
                   {!currentCompany?.texts && currentCompany?.text && (
                     <div className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
                       <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4 h-full">
                         {splitIntoParagraphs(currentCompany.text).map((para, cIdx) => (
-                          <LazyTextChunk
-                            key={cIdx}
-                            content={para}
-                            renderFn={renderHighlightedText}
-                          />
+                          <LazyTextChunk key={cIdx} content={para} renderFn={renderHighlightedText} />
                         ))}
                       </div>
-                    </div>
-                  )}
-
-                  {!currentCompany?.texts && !currentCompany?.text && (
-                    <div className="text-center text-slate-500 italic py-10">
-                      Aucun texte à analyser.
                     </div>
                   )}
                 </div>
@@ -744,25 +822,20 @@ export default function WorkspaceView({
                   ref={entityInputRef}
                   type="text"
                   value={currentEntityName}
-                  onChange={(e) => {
-                    const sanitized = e.target.value.replace(/[\x00-\x1F\u263A\u263B\u2665\u2666\u2663\u2660\u2022\u25D8\u25CB\u25D9\u2642\u2640\u266A\u266B\u263C\u25BA\u25C4\u2115\u203C\u00B6\u00A7\u25AC\u21A8\u2191\u2193\u2192\u2190\u221F\u2194\u25B2\u25BC]/g, '');
-                    setCurrentEntityName(sanitized);
-                  }}
+                  onChange={(e) => setCurrentEntityName(e.target.value.replace(/[\x00-\x1F\u263A\u263B\u2665\u2666\u2663\u2660\u2022\u25D8\u25CB\u25D9\u2642\u2640\u266A\u266B\u263C\u25BA\u25C4\u2115\u203C\u00B6\u00A7\u25AC\u21A8\u2191\u2193\u2192\u2190\u221F\u2194\u25B2\u25BC]/g, ''))}
                   placeholder="Nom de l'entité..."
-                  className="w-full px-4 py-3 text-lg font-medium border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 focus:ring-2 focus:ring-red-500 outline-none"
+                  className={`w-full px-4 py-3 text-lg font-medium border rounded-md bg-white dark:bg-slate-800 transition-all outline-none ${
+                    isCurrentInputDuplicate 
+                    ? 'border-amber-400 ring-2 ring-amber-400/20' 
+                    : 'border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-red-500'
+                  }`}
                 />
                 {entitySuggestions.length > 0 && (
                   <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-md p-2">
-                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mb-1">
-                      Entités similaires existantes :
-                    </p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mb-1">Entités similaires existantes :</p>
                     <div className="flex flex-wrap gap-1.5">
                       {entitySuggestions.map((name) => (
-                        <button
-                          key={name}
-                          onClick={() => setCurrentEntityName(name)}
-                          className="text-xs px-2.5 py-1 rounded-md bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-600 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition font-medium"
-                        >
+                        <button key={name} onClick={() => setCurrentEntityName(name)} className="text-xs px-2.5 py-1 rounded-md bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-600 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition font-medium">
                           {name}
                         </button>
                       ))}
@@ -784,36 +857,22 @@ export default function WorkspaceView({
                     className="flex-1 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border border-slate-300 dark:border-slate-600 rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-red-500"
                   >
                     {categories.map((cat, index) => (
-                      <option
-                        key={cat.id}
-                        value={cat.id}
-                        className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                      >
-                        {cat.name} [{index + 1}]
-                      </option>
+                      <option key={cat.id} value={cat.id} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">{cat.name} [{index + 1}]</option>
                     ))}
                   </select>
-                  <button
-                    onClick={handleAddEntity}
-                    className="bg-slate-800 text-white px-6 py-2 rounded-md font-bold hover:bg-slate-900 transition"
-                  >
-                    Associer [Entrée]
-                  </button>
+                  <button onClick={handleAddEntity} className="bg-slate-800 text-white px-6 py-2 rounded-md font-bold hover:bg-slate-900 transition">Associer [Entrée]</button>
                 </div>
               </div>
 
               <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex justify-end">
-                <button
-                  onClick={handleMarkNoTarget}
-                  className="text-sm font-medium flex items-center gap-1.5 text-slate-500 dark:text-slate-400 hover:text-green-600 dark:hover:text-green-500 transition"
-                >
+                <button onClick={handleMarkNoTarget} className="text-sm font-medium flex items-center gap-1.5 text-slate-500 dark:text-slate-400 hover:text-green-600 dark:hover:text-green-500 transition">
                   <CheckCircle2 className="w-4 h-4" /> Passer (Vide)
                 </button>
               </div>
             </div>
 
             <div className="p-5 flex-1 overflow-y-auto bg-white dark:bg-slate-800">
-              {!currentCompany || extractedEntities[currentCompany.uuid] === undefined ? (
+              {(!currentCompany || extractedEntities[currentCompany.uuid] === undefined) ? (
                 <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60 mt-10">
                   <Target className="w-16 h-16 mb-3" />
                   <p className="font-medium text-center">Aucune cible saisie</p>
@@ -825,122 +884,145 @@ export default function WorkspaceView({
                 </div>
               ) : (
                 <ul className="space-y-3">
-                  {extractedEntities[currentCompany.uuid].map((entity, idx) => (
-                    <li
-                      key={idx}
-                      className="flex flex-col p-3 bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 rounded-lg shadow-sm group"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex flex-col">
-                          <p className="font-bold text-slate-800 dark:text-slate-100 text-lg leading-tight">
-                            {entity.name}
-                          </p>
-                          {entity.note && (
-                            <span className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                              {entity.note}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleRemoveEntity(idx)}
-                          className="text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 p-1.5 rounded transition opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      {(() => {
-                        const cat =
-                          categories.find((c) => c.id === entity.type) || {
-                            name: entity.type,
-                            color: 'bg-slate-700',
-                            icon: 'Tag',
-                          };
-
-                        const IconComp =
-                          availableIcons[cat.icon] ||
-                          availableIcons.Tag;
-
-                        return (
-                          <div className="flex items-center gap-2">
-                            <div className={`p-1.5 rounded text-white shrink-0 ${cat.color}`}>
-                              <IconComp className="w-3 h-3" />
-                            </div>
-                            <select
-                              value={entity.type}
-                              onChange={(e) => handleChangeEntityType(idx, e.target.value)}
-                              className="text-xs uppercase tracking-wider font-bold bg-transparent dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1"
-                            >
-                              {categories.map((c) => (
-                                <option
-                                  key={c.id}
-                                  value={c.id}
-                                  className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                                >
-                                  {c.name}
-                                </option>
-                              ))}
-                              {!categories.some((c) => c.id === entity.type) && (
-                                <option
-                                  value={entity.type}
-                                  className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                                >
-                                  {entity.type} (Supprimée)
-                                </option>
+                  {extractedEntities[currentCompany.uuid].map((entity, idx) => {
+                    const isDupe = currentDocDuplicates.has(normalizeEntityName(entity.name));
+                    return (
+                      <li key={idx} className={`flex flex-col p-3 border rounded-lg shadow-sm group transition-colors ${
+                        isDupe 
+                        ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800/50' 
+                        : 'bg-slate-50 dark:bg-slate-700/50 border-slate-200 dark:border-slate-600'
+                      }`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold text-slate-800 dark:text-slate-100 text-lg leading-tight">{entity.name}</p>
+                              {isDupe && (
+                                <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" title="Doublon dans ce document" />
                               )}
-                            </select>
+                            </div>
+                            {entity.note && <span className="text-xs text-slate-500 dark:text-slate-400 mt-1">{entity.note}</span>}
                           </div>
-                        );
-                      })()}
-                    </li>
-                  ))}
+                          <button onClick={() => handleRemoveEntity(idx)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 p-1.5 rounded transition opacity-0 group-hover:opacity-100">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {(() => {
+                          const cat = categories.find((c) => c.id === entity.type) || { name: entity.type, color: 'bg-slate-700', icon: 'Tag' };
+                          const IconComp = availableIcons[cat.icon] || availableIcons.Tag;
+                          return (
+                            <div className="flex items-center gap-2">
+                              <div className={`p-1.5 rounded text-white shrink-0 ${cat.color}`}><IconComp className="w-3 h-3" /></div>
+                              <select
+                                value={entity.type}
+                                onChange={(e) => handleChangeEntityType(idx, e.target.value)}
+                                className="text-xs uppercase tracking-wider font-bold bg-transparent dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white cursor-pointer outline-none focus:ring-2 focus:ring-red-500 rounded p-1"
+                              >
+                                {categories.map((c) => (
+                                  <option key={c.id} value={c.id} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">{c.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })()}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
           </div>
         </div>
-      </div>
 
-      <ExportModal
-        isOpen={showExportModal}
-        onClose={() => setShowExportModal(false)}
-      />
+        <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
 
-      {showHotkeys && (
-        <div
-          className="fixed inset-0 z-100 flex items-center justify-center p-4"
-          onClick={() => setShowHotkeys(false)}
-        >
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
-          <div
-            className="relative glass-card rounded-2xl p-6 max-w-md w-full animate-scale-in"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2 mb-4">
-              <Keyboard className="w-5 h-5 text-red-600" /> Raccourcis Clavier
-            </h3>
-            <div className="space-y-2.5">
-              {[
-                ['←', 'Source précédente'],
-                ['→', 'Source suivante'],
-                ['Entrée', 'Associer l’entité saisie'],
-                ['1 - 9', 'Changer de catégorie'],
-                ['?', 'Afficher / masquer cette aide'],
-              ].map(([key, desc]) => (
-                <div key={key} className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600 dark:text-slate-300">{desc}</span>
-                  <kbd className="px-2.5 py-1 text-xs font-mono font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-md border border-slate-300 dark:border-slate-600 shadow-sm">
-                    {key}
-                  </kbd>
-                </div>
-              ))}
+        {showHotkeys && (
+          <div className="fixed inset-0 z-100 flex items-center justify-center p-4" onClick={() => setShowHotkeys(false)}>
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
+            <div className="relative glass-card rounded-2xl p-6 max-w-md w-full animate-scale-in" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2 mb-4">
+                <Keyboard className="w-5 h-5 text-red-600" /> Raccourcis Clavier
+              </h3>
+              <div className="space-y-2.5">
+                {[
+                  ['←', 'Source précédente'],
+                  ['→', 'Source suivante'],
+                  ['Entrée', 'Associer l’entité saisie'],
+                  ['1 - 9', 'Changer de catégorie'],
+                  ['?', 'Afficher / masquer cette aide'],
+                ].map(([key, desc]) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <span className="text-sm text-slate-600 dark:text-slate-300">{desc}</span>
+                    <kbd className="px-2.5 py-1 text-xs font-mono font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-md border border-slate-300 dark:border-slate-600 shadow-sm">{key}</kbd>
+                  </div>
+                ))}
+              </div>
             </div>
-            <p className="text-xs text-slate-400 dark:text-slate-500 mt-4 text-center">
-              Les raccourcis sont désactivés quand vous tapez dans un champ de texte.
-            </p>
           </div>
-        </div>
-      )}
+        )}
+
+        {pendingConflict && (
+          <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-md overflow-hidden animate-scale-in">
+              <div className={`p-4 flex items-center justify-between text-white ${pendingConflict.scope === 'local' ? 'bg-red-600' : 'bg-amber-500'}`}>
+                <div className="flex items-center gap-3">
+                  <ShieldAlert className="w-6 h-6" />
+                  <h3 className="font-bold text-lg">
+                    {pendingConflict.scope === 'local' ? 'Doublon Détecté' : 'Similitude Détectée'}
+                  </h3>
+                </div>
+                <span className="px-2 py-1 rounded bg-white/20 text-[10px] font-black tracking-widest uppercase">
+                  {pendingConflict.scope}
+                </span>
+              </div>
+              <div className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className={`w-2 h-2 rounded-full ${pendingConflict.scope === 'local' ? 'bg-red-500' : 'bg-amber-500'}`}></span>
+                  <p className="text-slate-600 dark:text-slate-300 text-sm font-semibold uppercase tracking-tight">
+                    Source: <span className="text-slate-900 dark:text-white font-bold">{pendingConflict.origin}</span>
+                  </p>
+                </div>
+                
+                <p className="text-slate-500 dark:text-slate-400 text-xs mb-6 leading-relaxed italic">
+                  {pendingConflict.scope === 'local' 
+                    ? "Cette entité est déjà présente dans l'enregistrement actif." 
+                    : "Cette entité ressemble à une saisie existante dans un autre enregistrement du projet."}
+                </p>
+                <div className="space-y-4">
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Entité existante :</p>
+                    <p className="font-bold text-slate-900 dark:text-white">« {pendingConflict.existingEntity.name} »</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                    <p className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 mb-1">Nouvelle tentative :</p>
+                    <p className="font-bold text-slate-900 dark:text-white">« {pendingConflict.newName} »</p>
+                  </div>
+                </div>
+                <div className="mt-8 flex flex-col gap-2">
+                  <button onClick={() => handleResolveConflict('merge-keep-old')} className="w-full py-2.5 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg font-bold transition-colors flex items-center justify-between">
+                    <span>Fusionner (Garder l'ancien nom)</span>
+                    <CheckCircle2 className="w-4 h-4 text-slate-400" />
+                  </button>
+                  <button onClick={() => handleResolveConflict('merge-keep-new')} className="w-full py-2.5 px-4 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-lg font-bold transition-colors flex items-center justify-between">
+                    <span>Remplacer par le nouveau</span>
+                    <Save className="w-4 h-4 text-blue-400" />
+                  </button>
+                  <div className="relative py-2">
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-slate-200 dark:border-slate-700"></div>
+                    <span className="relative bg-white dark:bg-slate-900 px-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest mx-auto block w-fit">ou</span>
+                  </div>
+                  <button onClick={() => handleResolveConflict('keep-both')} className="w-full py-2.5 px-4 bg-linear-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-lg font-bold transition-all shadow-lg shadow-red-500/20">
+                    Garder les deux (Doublons)
+                  </button>
+                  <button onClick={() => setPendingConflict(null)} className="mt-2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors py-2 font-medium text-center">
+                    Annuler l'opération
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   );
 }

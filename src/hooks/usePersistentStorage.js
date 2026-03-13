@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import localforage from 'localforage';
 
 /**
  * Hook personnalisé pour synchroniser l'état React avec IndexedDB via localforage.
- * Contrairement au localStorage, localforage est asynchrone.
  * 
  * @param {string} key La clé sous laquelle stocker la donnée.
  * @param {any} initialValue La valeur initiale par défaut.
@@ -12,44 +11,51 @@ import localforage from 'localforage';
 export function usePersistentStorage(key, initialValue) {
   const [storedValue, setStoredValue] = useState(initialValue);
   const [isLoaded, setIsLoaded] = useState(false);
+  const isMounted = useRef(false);
 
   // Charger la valeur initiale depuis IndexedDB au montage
   useEffect(() => {
+    isMounted.current = true;
     localforage.getItem(key)
       .then(value => {
-        if (value !== null) {
-          setStoredValue(value);
+        if (value !== null && isMounted.current) {
+          if (typeof initialValue === 'object' && initialValue !== null && typeof value === 'object') {
+            setStoredValue({ ...initialValue, ...value });
+          } else {
+            setStoredValue(value);
+          }
         }
         setIsLoaded(true);
       })
       .catch(err => {
         console.warn(`Erreur de lecture IndexedDB (${key}):`, err);
-        setIsLoaded(true); // On marque comme prêt même si erreur pour débloquer l'UI
+        if (isMounted.current) setIsLoaded(true);
       });
+    
+    return () => { isMounted.current = false; };
   }, [key]);
 
-  // Fonction pour mettre à jour la valeur
-  const setValue = async (value) => {
-    try {
-      // Gérer les setters de type fonction (comme useState)
-      const valueToStore = typeof value === 'function' ? value(storedValue) : value;
-      
-      setStoredValue(valueToStore);
-      await localforage.setItem(key, valueToStore);
-    } catch (error) {
-      console.warn(`Erreur de sauvegarde IndexedDB (${key}):`, error);
+  // Persistence side-effect
+  useEffect(() => {
+    if (isLoaded) {
+      localforage.setItem(key, storedValue).catch(err => {
+        console.warn(`Erreur de sauvegarde IndexedDB (${key}):`, err);
+      });
     }
-  };
+  }, [key, storedValue, isLoaded]);
+
+  // Fonction pour mettre à jour la valeur (pure)
+  const setValue = useCallback((value) => {
+    setStoredValue(prev => {
+      return typeof value === 'function' ? value(prev) : value;
+    });
+  }, []);
 
   // Fonction pour effacer la donnée
-  const removeValue = async () => {
-    try {
-      setStoredValue(initialValue);
-      await localforage.removeItem(key);
-    } catch (error) {
-      console.warn(`Erreur de suppression IndexedDB (${key}):`, error);
-    }
-  };
+  const removeValue = useCallback(async () => {
+    setStoredValue(initialValue);
+    await localforage.removeItem(key);
+  }, [key, initialValue]);
 
   return [storedValue, setValue, isLoaded, removeValue];
 }

@@ -8,8 +8,6 @@ import { Loader2 } from 'lucide-react';
 const LOCAL_STORAGE_KEY = 'ba7ath_osint_session_v2';
 
 export default function ManualTagger() {
-  const [csvHeaders, setCsvHeaders] = useState([]);
-  const [rawCsvData, setRawCsvData] = useState([]);
   const [configStep, setConfigStep] = useState(false);
   const [isCsvLoaded, setIsCsvLoaded] = useState(false);
 
@@ -27,10 +25,12 @@ export default function ManualTagger() {
       capitals: true,
       acronyms: false,
       legal: false
-    }
+    },
+    columnMapping: { id: '', textColumns: [], metadata: [] },
+    rawCsvData: [],
+    csvHeaders: []
   });
 
-  const [columnMapping, setColumnMapping] = useState({ id: '', textColumns: [], metadata: [] });
   const [papaLoaded, setPapaLoaded] = useState(false);
 
   // Charger PapaParse globalement
@@ -84,51 +84,48 @@ export default function ManualTagger() {
   }
 
   const handleDataParsed = (headers, data, autoMap) => {
-    setCsvHeaders(headers);
-    setRawCsvData(data);
-    setColumnMapping(autoMap);
+    setSession(prev => ({ 
+      ...prev, 
+      csvHeaders: headers, 
+      rawCsvData: data, 
+      columnMapping: autoMap 
+    }));
     setConfigStep(true);
   };
 
-  const confirmConfiguration = () => {
-    if (!columnMapping.textColumns || columnMapping.textColumns.length === 0) {
-      alert("Vous devez sélectionner au moins une colonne de texte à analyser.");
-      return;
-    }
+  const confirmConfiguration = (newConfig) => {
+    const finalMapping = newConfig.columnMapping;
+    const finalCategories = newConfig.categories;
+    const finalRules = newConfig.highlightRules;
+    const rawCsvData = session.rawCsvData;
 
     const formattedData = rawCsvData.map((row, idx) => {
-      // Build dynamic metadata object
       const meta = {};
-      if (columnMapping.metadata && columnMapping.metadata.length > 0) {
-        columnMapping.metadata.forEach(key => {
+      if (finalMapping.metadata && finalMapping.metadata.length > 0) {
+        finalMapping.metadata.forEach(key => {
           meta[key] = row[key] || "";
         });
       }
 
-      // Build text blocks array
-      const textBlocks = columnMapping.textColumns.map(col => ({
+      const textBlocks = finalMapping.textColumns.map(col => ({
         title: col,
         content: row[col] || ""
       })).filter(block => block.content.trim() !== "");
 
       return {
-        uuid: columnMapping.id && row[columnMapping.id] ? row[columnMapping.id] : `row-${idx}`,
+        uuid: finalMapping.id && row[finalMapping.id] ? row[finalMapping.id] : `row-${idx}`,
         texts: textBlocks,
         metadata: meta
       };
     }).filter(c => c.texts.length > 0);
 
-    setSession({
+    setSession(prev => ({
+      ...prev,
       entreprises: formattedData,
-      currentIndex: 0,
-      extractedEntities: {},
-      categories: session.categories || [
-        { id: 'Entreprise', name: 'Entreprise', color: 'bg-slate-700', icon: 'Building2' },
-        { id: 'Autorite', name: 'Autorité', color: 'bg-red-600', icon: 'ShieldAlert' },
-        { id: 'Personne', name: 'Personne', color: 'bg-blue-600', icon: 'User' }
-      ],
-      highlightRules: session.highlightRules || { capitals: true, acronyms: false, legal: false }
-    });
+      columnMapping: finalMapping,
+      categories: finalCategories,
+      highlightRules: finalRules
+    }));
 
     setIsCsvLoaded(true);
     setConfigStep(false);
@@ -145,17 +142,20 @@ export default function ManualTagger() {
   // === SESSION IMPORT (Phase 8) ===
   const handleSessionImport = (data) => {
     setSession({
+      ...session,
       entreprises: data.entreprises,
       extractedEntities: data.extractedEntities,
       currentIndex: data.currentIndex || 0,
       categories: data.categories || session.categories,
-      highlightRules: data.highlightRules || session.highlightRules
+      highlightRules: data.highlightRules || session.highlightRules,
+      rawCsvData: data.rawCsvData || session.rawCsvData,
+      csvHeaders: data.csvHeaders || session.csvHeaders,
+      columnMapping: data.columnMapping || session.columnMapping
     });
     setIsCsvLoaded(true);
     setConfigStep(false);
   };
 
-  // Vues conditionnelles (Router simple)
   if (!isCsvLoaded && !configStep) {
     return <UploadView onDataParsed={handleDataParsed} papaLoaded={papaLoaded} onSessionImport={handleSessionImport} />;
   }
@@ -163,15 +163,13 @@ export default function ManualTagger() {
   if (configStep) {
     return (
       <ConfigureView 
-        csvHeaders={csvHeaders} 
-        columnMapping={columnMapping} 
-        setColumnMapping={setColumnMapping}
+        csvHeaders={session.csvHeaders || []} 
+        columnMapping={session.columnMapping} 
         categories={session.categories}
-        setCategories={(newCategories) => setSession(prev => ({ ...prev, categories: typeof newCategories === 'function' ? newCategories(prev.categories) : newCategories }))}
-        highlightRules={session.highlightRules || { capitals: true, acronyms: false, legal: false }}
-        setHighlightRules={(rules) => setSession(prev => ({ ...prev, highlightRules: typeof rules === 'function' ? rules(prev.highlightRules || { capitals: true, acronyms: false, legal: false }) : rules }))}
+        highlightRules={session.highlightRules}
         onCancel={() => setConfigStep(false)}
         onConfirm={confirmConfiguration}
+        isEditing={isCsvLoaded}
       />
     );
   }
@@ -183,13 +181,10 @@ export default function ManualTagger() {
       setCurrentIndex={(idx) => setSession(prev => ({ ...prev, currentIndex: typeof idx === 'function' ? idx(prev.currentIndex) : idx }))}
       extractedEntities={session.extractedEntities}
       setExtractedEntities={(newEntities) => setSession(prev => ({ ...prev, extractedEntities: typeof newEntities === 'function' ? newEntities(prev.extractedEntities) : newEntities }))}
-      categories={session.categories || [
-        { id: 'Entreprise', name: 'Entreprise', color: 'bg-slate-700', icon: 'Building2' },
-        { id: 'Autorite', name: 'Autorité', color: 'bg-red-600', icon: 'ShieldAlert' },
-        { id: 'Personne', name: 'Personne', color: 'bg-blue-600', icon: 'User' }
-      ]}
+      categories={session.categories || []}
       highlightRules={session.highlightRules || { capitals: true, acronyms: false, legal: false }}
       resetSession={resetSession}
+      onOpenConfig={() => setConfigStep(true)}
     />
   );
 }

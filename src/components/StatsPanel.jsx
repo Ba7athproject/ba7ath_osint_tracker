@@ -82,6 +82,9 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
     // Détection de doublons (case-insensitive + similarité simple)
     const nameMap = {}; // lowercase -> [original names]
     allEntities.forEach(e => {
+      // On ignore les entités marquées comme intentionnellement dupliquées
+      if (e.isDuplicateIntentional) return;
+
       const lower = e.name.toLowerCase().trim();
       if (!nameMap[lower]) nameMap[lower] = new Set();
       nameMap[lower].add(e.name);
@@ -118,6 +121,21 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
+        });
+      });
+      return updated;
+    });
+  };
+
+  const handleIgnoreConflict = (duplicateGroup) => {
+    setExtractedEntities(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(uuid => {
+        updated[uuid] = updated[uuid].map(entity => {
+          if (duplicateGroup.variants.includes(entity.name)) {
+            return { ...entity, isDuplicateIntentional: true };
+          }
+          return entity;
         });
       });
       return updated;
@@ -235,7 +253,7 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
                       <p className="text-[10px] uppercase font-black text-slate-400 mb-2">
                         Variantes pour <span className="text-slate-700 dark:text-slate-200 inline-block bg-slate-100 dark:bg-slate-700 px-1 rounded">« {group.key} »</span> ({group.count} occurrences) :
                       </p>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-1.5 mt-2">
                         {group.variants.map(variant => (
                           <button
                             key={variant}
@@ -245,6 +263,12 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
                             Fusionner vers « {variant} »
                           </button>
                         ))}
+                        <button
+                          onClick={() => handleIgnoreConflict(group)}
+                          className="text-[11px] px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-600 dark:hover:text-slate-300 transition-all font-bold"
+                        >
+                          Garder tels quels
+                        </button>
                       </div>
                     </div>
                   ))
