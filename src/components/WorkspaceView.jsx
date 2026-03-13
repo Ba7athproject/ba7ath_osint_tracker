@@ -16,17 +16,51 @@ const availableIcons = {
 
 const normalizeEntityName = (name) => {
   if (!name) return '';
-  const noiseWords = new Set(['the', 'of', 'and', 'a', 'an', 'in', 'on', 'at', 'for', 'with', 'by']);
+  // Noise words including conjunctions
+  const noiseWords = new Set(['the', 'of', 'and', 'a', 'an', 'in', 'on', 'at', 'for', 'with', 'by', 'et', '&']);
   
   return name
     .toLowerCase()
     .trim()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/[.,;:"'!?(){}[\]]/g, ' ') // Replace punctuation with space
+    .replace(/[.,;:"'!?(){}[\]&]/g, ' ') // Replace punctuation (added &) with space
     .split(/\s+/)
     .filter(token => token.length > 0 && !noiseWords.has(token))
+    .map(token => {
+      // Basic singularization: remove trailing 's' if token length > 3
+      if (token.length > 3 && token.endsWith('s')) {
+        return token.slice(0, -1);
+      }
+      return token;
+    })
     .sort()
     .join(' ');
+};
+
+const getLevenshteinDistance = (a, b) => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          Math.min(
+            matrix[i][j - 1] + 1, // insertion
+            matrix[i - 1][j] + 1  // deletion
+          )
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
 };
 
 const LazyTextChunk = ({ content, renderFn }) => {
@@ -238,7 +272,16 @@ export default function WorkspaceView({
 
     // --- PHASE 1: LOCAL SCAN (Current record) ---
     const existingInDoc = extractedEntities[currentCompany.uuid] || [];
-    const localConflict = existingInDoc.find((e) => normalizeEntityName(e.name) === normalizedClean);
+    // Search for normalized match OR fuzzy match (distance <= 2)
+    const localConflict = existingInDoc.find((e) => {
+      const normE = normalizeEntityName(e.name);
+      if (normE === normalizedClean) return true;
+      // Fuzzy check only for reasonably long names to avoid false positives on short ones
+      if (normalizedClean.length > 3 && normE.length > 3) {
+        return getLevenshteinDistance(normalizedClean, normE) <= 2;
+      }
+      return false;
+    });
 
     if (localConflict && !force) {
       setPendingConflict({
@@ -253,21 +296,34 @@ export default function WorkspaceView({
     }
 
     // --- PHASE 2: GLOBAL SCAN (Rest of the project) ---
-    // We only check globally if we are not forcing and there's no local conflict
     if (!force) {
       const globalMatch = Object.entries(extractedEntities).find(([uuid, entities]) => {
         if (uuid === currentCompany.uuid) return false;
-        return entities.some(e => normalizeEntityName(e.name) === normalizedClean);
+        return entities.some(e => {
+          const normE = normalizeEntityName(e.name);
+          if (normE === normalizedClean) return true;
+          if (normalizedClean.length > 3 && normE.length > 3) {
+            return getLevenshteinDistance(normalizedClean, normE) <= 2;
+          }
+          return false;
+        });
       });
 
       if (globalMatch) {
         const [originUuid, entities] = globalMatch;
-        const globalConflict = entities.find(e => normalizeEntityName(e.name) === normalizedClean);
+        const globalConflict = entities.find(e => {
+          const normE = normalizeEntityName(e.name);
+          if (normE === normalizedClean) return true;
+          if (normalizedClean.length > 3 && normE.length > 3) {
+            return getLevenshteinDistance(normalizedClean, normE) <= 2;
+          }
+          return false;
+        });
         
-        // PER USER REQUEST: Inutile de signaler en cas de similitude 100% au niveau global
-        const isExactMatch = globalConflict.name === cleanName;
+        // STRICT BYPASS: Only if the string is 100% identical (including case)
+        const isStrictIdentical = globalConflict.name === cleanName;
         
-        if (!isExactMatch) {
+        if (!isStrictIdentical) {
           setPendingConflict({
             newName: cleanName,
             existingEntity: globalConflict,
