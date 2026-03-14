@@ -1,58 +1,77 @@
 import React, { useState } from 'react';
-import { X, FileSpreadsheet, Layers, FileJson, Share2, Download, ChevronRight } from 'lucide-react';
+import { 
+  X, FileSpreadsheet, Layers, FileJson, Share2, Download, 
+  ChevronRight, Sparkles 
+} from 'lucide-react';
 
 /**
  * ExportModal — Modal d'exportation multi-format.
- * Supporte : CSV Plat, CSV Groupé, JSON NER, et Export Réseau (Gephi/Neo4J/Kumu).
+ * Supporte : CSV Plat, CSV Groupé, JSON NER, et Export Réseau.
+ * v1.6.0 — Sécurité renforcée & Optimisation UI.
  */
-export default function ExportModal({ isOpen, onClose, entreprises, extractedEntities, categories }) {
+export default function ExportModal({ 
+  isOpen, 
+  onClose, 
+  entreprises = [], 
+  extractedEntities = {}, 
+  categories = [] 
+}) {
   const [activeTab, setActiveTab] = useState(null);
+  const [cleanExport, setCleanExport] = useState(true);
+
+  // Sécurité pour les props pouvant être nulles
+  const data = entreprises || [];
+  const entitiesMap = extractedEntities || {};
+  const cats = categories || [];
 
   if (!isOpen) return null;
 
   // === UTILITAIRES CSV ===
   const escapeCsv = (val) => {
-    if (!val) return '';
+    if (val === null || val === undefined) return '';
     const str = String(val).replace(/"/g, '""');
     return str.includes(',') || str.includes('\n') || str.includes('"') ? `"${str}"` : str;
   };
 
   const downloadFile = (content, filename, type) => {
     const blob = new Blob([content], { type });
-    const link = document.createElement('a');
+    const link = document.body.appendChild(document.createElement('a'));
     link.href = URL.createObjectURL(blob);
     link.download = filename;
-    document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   const dateTag = new Date().toISOString().split('T')[0];
 
-  // Récupérer les clés de métadonnées dynamiquement
-  const metadataKeys = entreprises.length > 0 && entreprises[0].metadata
-    ? Object.keys(entreprises[0].metadata) : [];
+  // Récupération dynamique des clés de métadonnées (Point F Audit)
+  const metadataKeys = (data.length > 0 && data[0]?.metadata)
+    ? Object.keys(data[0].metadata) : [];
 
   // === FORMAT 1 : CSV PLAT (1 ligne = 1 entité) ===
   const handleExportFlat = () => {
-    if (Object.keys(extractedEntities).length === 0) {
-      return alert("Aucune entité à exporter.");
+    if (Object.keys(entitiesMap).length === 0) {
+      return alert("Aucune entité à extraire.");
     }
 
     let csv = 'uuid_source';
     metadataKeys.forEach(key => { csv += `,${escapeCsv(key)}`; });
     csv += ',cible_extraite,type_cible,note_contexte\n';
 
-    Object.entries(extractedEntities).forEach(([uuid, entities]) => {
-      const source = entreprises.find(c => c.uuid === uuid);
+    Object.entries(entitiesMap).forEach(([uuid, entities]) => {
+      const source = data.find(c => c.uuid === uuid);
       let prefix = escapeCsv(uuid);
       metadataKeys.forEach(key => {
         prefix += `,${escapeCsv(source?.metadata?.[key])}`;
       });
 
-      entities.forEach(entity => {
-        csv += `${prefix},${escapeCsv(entity.name)},${escapeCsv(entity.type)},${escapeCsv(entity.note)}\n`;
-      });
+      if (Array.isArray(entities)) {
+        entities.forEach(entity => {
+          const isAiNote = entity.isAiSuggestion || (entity.note && entity.note.startsWith('[IA/'));
+          const finalNote = cleanExport && isAiNote ? '' : (entity.note || '');
+          csv += `${prefix},${escapeCsv(entity.name)},${escapeCsv(entity.type)},${escapeCsv(finalNote)}\n`;
+        });
+      }
     });
 
     downloadFile(csv, `Ba7ath_Flat_${dateTag}.csv`, 'text/csv;charset=utf-8;');
@@ -61,27 +80,29 @@ export default function ExportModal({ isOpen, onClose, entreprises, extractedEnt
 
   // === FORMAT 2 : CSV GROUPÉ (1 ligne = 1 source) ===
   const handleExportGrouped = () => {
-    if (Object.keys(extractedEntities).length === 0) {
-      return alert("Aucune entité à exporter.");
+    if (Object.keys(entitiesMap).length === 0) {
+      return alert("Aucune entité à extraire.");
     }
 
-    // En-têtes : uuid, metadata..., puis une colonne par catégorie
     let csv = 'uuid_source';
     metadataKeys.forEach(key => { csv += `,${escapeCsv(key)}`; });
-    categories.forEach(cat => { csv += `,${escapeCsv(cat.name)}`; });
+    cats.forEach(cat => { csv += `,${escapeCsv(cat.name)}`; });
     csv += '\n';
 
-    Object.entries(extractedEntities).forEach(([uuid, entities]) => {
-      const source = entreprises.find(c => c.uuid === uuid);
+    Object.entries(entitiesMap).forEach(([uuid, entities]) => {
+      const source = data.find(c => c.uuid === uuid);
       let row = escapeCsv(uuid);
       metadataKeys.forEach(key => {
         row += `,${escapeCsv(source?.metadata?.[key])}`;
       });
 
-      // Regrouper les entités par type de catégorie
-      categories.forEach(cat => {
-        const matching = entities.filter(e => e.type === cat.id).map(e => e.name);
-        row += `,${escapeCsv(matching.join(' ; '))}`;
+      cats.forEach(cat => {
+        if (Array.isArray(entities)) {
+          const matching = entities.filter(e => e.type === cat.id).map(e => e.name);
+          row += `,${escapeCsv(matching.join(' ; '))}`;
+        } else {
+          row += ',';
+        }
       });
 
       csv += row + '\n';
@@ -93,59 +114,59 @@ export default function ExportModal({ isOpen, onClose, entreprises, extractedEnt
 
   // === FORMAT 3 : JSON NER (Fine-Tuning) ===
   const handleExportJSON = () => {
-    if (Object.keys(extractedEntities).length === 0) {
-      return alert("Aucune entité à exporter.");
+    if (Object.keys(entitiesMap).length === 0) {
+      return alert("Aucune entité à extraire.");
     }
 
-    const output = Object.entries(extractedEntities).map(([uuid, entities]) => {
-      const source = entreprises.find(c => c.uuid === uuid);
+    const output = Object.entries(entitiesMap).map(([uuid, entities]) => {
+      const source = data.find(c => c.uuid === uuid);
       return {
         uuid,
-        texts: source?.texts || [],
+        texts: cleanExport ? undefined : (source?.texts || []),
         metadata: source?.metadata || {},
-        entities: entities.map(e => ({
-          name: e.name,
-          type: e.type,
-          note: e.note || ''
-        }))
+        entities: Array.isArray(entities) ? entities.map(e => {
+          const isAiNote = e.isAiSuggestion || (e.note && e.note.startsWith('[IA/'));
+          return {
+            name: e.name,
+            type: e.type,
+            note: (cleanExport && isAiNote) ? '' : (e.note || '')
+          };
+        }) : []
       };
     });
 
-    const jsonStr = JSON.stringify(output, null, 2);
-    downloadFile(jsonStr, `Ba7ath_NER_${dateTag}.json`, 'application/json;charset=utf-8;');
+    downloadFile(JSON.stringify(output, null, 2), `Ba7ath_NER_${dateTag}.json`, 'application/json;charset=utf-8;');
     onClose();
   };
 
-  // === FORMAT 4 : EXPORT RÉSEAU (Gephi / Neo4J / Kumu) ===
+  // === FORMAT 4 : EXPORT RÉSEAU ===
   const handleExportNetwork = (mode) => {
-    if (Object.keys(extractedEntities).length === 0) {
-      return alert("Aucune entité à exporter.");
+    if (Object.keys(entitiesMap).length === 0) {
+      return alert("Aucune entité à extraire.");
     }
 
-    const nodesMap = new Map(); // Id -> { label, type }
+    const nodesMap = new Map();
     let edgesCsv = 'Source,Target,Type,Label\n';
 
-    Object.entries(extractedEntities).forEach(([uuid, entities]) => {
-      const source = entreprises.find(c => c.uuid === uuid);
-      // Nœud source
+    Object.entries(entitiesMap).forEach(([uuid, entities]) => {
+      const source = data.find(c => c.uuid === uuid);
       const sourceLabel = source?.metadata
         ? Object.values(source.metadata).filter(v => v).join(' - ') || uuid
         : uuid;
       nodesMap.set(uuid, { label: sourceLabel, type: 'Source' });
 
-      entities.forEach(entity => {
-        // Nœud entité
-        const entityId = `${entity.type}::${entity.name}`;
-        if (!nodesMap.has(entityId)) {
-          const catName = categories.find(c => c.id === entity.type)?.name || entity.type;
-          nodesMap.set(entityId, { label: entity.name, type: catName });
-        }
-        // Edge
-        edgesCsv += `${escapeCsv(uuid)},${escapeCsv(entityId)},${escapeCsv(entity.type)},${escapeCsv(entity.name)}\n`;
-      });
+      if (Array.isArray(entities)) {
+        entities.forEach(entity => {
+          const entityId = `${entity.type}::${entity.name}`;
+          if (!nodesMap.has(entityId)) {
+            const catName = cats.find(c => c.id === entity.type)?.name || entity.type;
+            nodesMap.set(entityId, { label: entity.name, type: catName });
+          }
+          edgesCsv += `${escapeCsv(uuid)},${escapeCsv(entityId)},${escapeCsv(entity.type)},${escapeCsv(entity.name)}\n`;
+        });
+      }
     });
 
-    // Nodes CSV
     let nodesCsv = 'Id,Label,Type\n';
     nodesMap.forEach((val, key) => {
       nodesCsv += `${escapeCsv(key)},${escapeCsv(val.label)},${escapeCsv(val.type)}\n`;
@@ -155,7 +176,6 @@ export default function ExportModal({ isOpen, onClose, entreprises, extractedEnt
       downloadFile(edgesCsv, `Ba7ath_Edges_${dateTag}.csv`, 'text/csv;charset=utf-8;');
     }
     if (mode === 'both' || mode === 'nodes') {
-      // Petit délai pour que le navigateur gère les 2 téléchargements
       setTimeout(() => {
         downloadFile(nodesCsv, `Ba7ath_Nodes_${dateTag}.csv`, 'text/csv;charset=utf-8;');
       }, 300);
@@ -163,92 +183,61 @@ export default function ExportModal({ isOpen, onClose, entreprises, extractedEnt
     onClose();
   };
 
-  // === FORMATS D'EXPORT DISPONIBLES ===
   const formats = [
-    {
-      id: 'flat',
-      icon: FileSpreadsheet,
-      title: 'CSV Plat',
-      desc: '1 ligne = 1 entité. Idéal pour SQL, Excel, et l\'import en base de données.',
-      color: 'text-green-600 dark:text-green-400',
-      bgColor: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/50',
-      action: handleExportFlat
-    },
-    {
-      id: 'grouped',
-      icon: Layers,
-      title: 'CSV Groupé',
-      desc: '1 ligne = 1 source. Entités regroupées par type dans des colonnes séparées.',
-      color: 'text-blue-600 dark:text-blue-400',
-      bgColor: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800/50',
-      action: handleExportGrouped
-    },
-    {
-      id: 'json',
-      icon: FileJson,
-      title: 'JSON (NER)',
-      desc: 'Structure JSON pour le fine-tuning de modèles NER / LLM. Texte + Entités.',
-      color: 'text-amber-600 dark:text-amber-400',
-      bgColor: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50',
-      action: handleExportJSON
-    },
-    {
-      id: 'network',
-      icon: Share2,
-      title: 'Export Réseau',
-      desc: 'Fichiers Edges + Nodes pour Gephi, Neo4J, Kumu. Import direct sans nettoyage.',
-      color: 'text-purple-600 dark:text-purple-400',
-      bgColor: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800/50',
-      action: null // Handled by sub-options
-    }
+    { id: 'flat', icon: FileSpreadsheet, title: 'CSV Plat', desc: '1 ligne = 1 entité.', color: 'text-green-600', bgColor: 'bg-green-50', action: handleExportFlat },
+    { id: 'grouped', icon: Layers, title: 'CSV Groupé', desc: '1 ligne = 1 source.', color: 'text-blue-600', bgColor: 'bg-blue-50', action: handleExportGrouped },
+    { id: 'json', icon: FileJson, title: 'JSON (NER)', desc: 'Format Fine-Tuning.', color: 'text-amber-600', bgColor: 'bg-amber-50', action: handleExportJSON },
+    { id: 'network', icon: Share2, title: 'Export Réseau', desc: 'Gephi / Neo4J / Kumu.', color: 'text-purple-600', bgColor: 'bg-purple-50', action: null }
   ];
 
-  const entityCount = Object.values(extractedEntities).reduce((acc, arr) => acc + arr.length, 0);
-  const sourceCount = Object.keys(extractedEntities).length;
+  const entityCount = Object.values(entitiesMap).reduce((acc, arr) => acc + (arr?.length || 0), 0);
+  const sourceCount = Object.keys(entitiesMap).length;
 
   return (
-    <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-99999 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose}></div>
-
-      {/* Modal */}
       <div className="relative glass-card rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700">
           <div>
             <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <Download className="w-5 h-5 text-red-600" /> Exporter les données
             </h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              {entityCount} entités extraites de {sourceCount} sources
+              {entityCount} entités de {sourceCount} sources
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
-          >
+          <button onClick={onClose} className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Body */}
+        {/* Bascule du nettoyage IA */}
+        <div className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-4">
+          <div className="flex items-center justify-between cursor-pointer" onClick={() => setCleanExport(!cleanExport)}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${cleanExport ? 'bg-purple-100 dark:bg-purple-900/40' : 'bg-slate-200 dark:bg-slate-800'}`}>
+                <Sparkles className={`w-4 h-4 ${cleanExport ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500'}`} />
+              </div>
+              <div>
+                <span className="text-sm font-bold text-slate-900 dark:text-white block">Nettoyage IA Actif</span>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400">Payload uniquement (ignore bruits IA et textes sources)</span>
+              </div>
+            </div>
+            <div className={`w-11 h-6 rounded-full relative transition-colors ${cleanExport ? 'bg-purple-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+              <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${cleanExport ? 'translate-x-5' : ''}`}></div>
+            </div>
+          </div>
+        </div>
+
         <div className="p-6 space-y-4">
           {formats.map(fmt => {
             const Icon = fmt.icon;
             const isNetwork = fmt.id === 'network';
-            const isExpanded = activeTab === 'network' && isNetwork;
-
             return (
               <div key={fmt.id}>
                 <button
-                  onClick={() => {
-                    if (isNetwork) {
-                      setActiveTab(activeTab === 'network' ? null : 'network');
-                    } else {
-                      fmt.action();
-                    }
-                  }}
-                  className={`w-full text-left p-5 rounded-xl border-2 transition-all hover:shadow-md group ${activeTab === fmt.id || isExpanded ? fmt.bgColor : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}
+                  onClick={() => isNetwork ? setActiveTab(activeTab === 'network' ? null : 'network') : fmt.action()}
+                  className={`w-full text-left p-5 rounded-xl border-2 transition-all hover:shadow-md ${activeTab === fmt.id ? fmt.bgColor : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}
                 >
                   <div className="flex items-start gap-4">
                     <div className={`p-2.5 rounded-lg ${fmt.bgColor}`}>
@@ -257,56 +246,21 @@ export default function ExportModal({ isOpen, onClose, entreprises, extractedEnt
                     <div className="flex-1">
                       <h3 className="font-bold text-slate-900 dark:text-white text-lg flex items-center gap-2">
                         {fmt.title}
-                        {!isNetwork && <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition" />}
+                        {!isNetwork && <ChevronRight className="w-4 h-4 text-slate-400" />}
                       </h3>
                       <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{fmt.desc}</p>
                     </div>
                   </div>
                 </button>
-
-                {/* Sub-options pour Export Réseau */}
-                {isExpanded && (
-                  <div className="mt-3 ml-14 flex flex-col gap-2 animate-in fade-in">
-                    <button
-                      onClick={() => handleExportNetwork('both')}
-                      className="flex items-center gap-3 px-4 py-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition text-left"
-                    >
-                      <Share2 className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
-                      <div>
-                        <span className="font-semibold text-sm text-purple-900 dark:text-purple-200">Edges + Nodes</span>
-                        <span className="block text-xs text-purple-600 dark:text-purple-400">Télécharger les 2 fichiers CSV (recommandé pour Gephi)</span>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => handleExportNetwork('edges')}
-                      className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition text-left"
-                    >
-                      <Share2 className="w-4 h-4 text-slate-500 shrink-0" />
-                      <div>
-                        <span className="font-semibold text-sm text-slate-700 dark:text-slate-200">Edges uniquement</span>
-                        <span className="block text-xs text-slate-500 dark:text-slate-400">Source → Target (compatible Kumu, Neo4J)</span>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => handleExportNetwork('nodes')}
-                      className="flex items-center gap-3 px-4 py-3 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition text-left"
-                    >
-                      <Share2 className="w-4 h-4 text-slate-500 shrink-0" />
-                      <div>
-                        <span className="font-semibold text-sm text-slate-700 dark:text-slate-200">Nodes uniquement</span>
-                        <span className="block text-xs text-slate-500 dark:text-slate-400">Liste de tous les nœuds (Id, Label, Type)</span>
-                      </div>
-                    </button>
+                {activeTab === 'network' && isNetwork && (
+                  <div className="mt-3 ml-14 flex flex-col gap-2">
+                    <button onClick={() => handleExportNetwork('both')} className="p-3 text-sm font-bold rounded-lg bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 hover:bg-purple-100 transition border border-purple-200">Edges + Nodes (Gephi)</button>
+                    <button onClick={() => handleExportNetwork('edges')} className="p-3 text-sm font-bold rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 transition border border-slate-200">Edges uniquement (Kumu)</button>
                   </div>
                 )}
               </div>
             );
           })}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-700 text-center">
-          <p className="text-xs text-slate-400">Tous les exports sont générés localement. Aucune donnée ne quitte votre navigateur.</p>
         </div>
       </div>
     </div>

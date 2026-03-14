@@ -11,7 +11,7 @@ export default function ManualTagger() {
   const [configStep, setConfigStep] = useState(false);
   const [isCsvLoaded, setIsCsvLoaded] = useState(false);
 
-  // States persistant via IndexedDB (Phase 12)
+  // États persistants via IndexedDB (Phase 12)
   const [session, setSession, isSessionLoaded, removeSession] = usePersistentStorage(LOCAL_STORAGE_KEY, {
     entreprises: [],
     extractedEntities: {},
@@ -31,6 +31,52 @@ export default function ManualTagger() {
     csvHeaders: []
   });
 
+  // Migration du format de mapping (Point M - v1.6.0)
+  useEffect(() => {
+    if (!isSessionLoaded || !session.columnMapping) return;
+    
+    const mapping = session.columnMapping;
+    // Condition de migration : présence de 'text' (ancien) et absence de 'textColumns' valide (nouveau)
+    if (mapping.text && (!mapping.textColumns || mapping.textColumns.length === 0)) {
+      console.log("Migration du format de mapping (v1.3 -> v1.6.0) en cours...");
+      setSession(prev => {
+        const newMapping = {
+          id: prev.columnMapping.id || '',
+          textColumns: [prev.columnMapping.text],
+          metadata: Array.isArray(prev.columnMapping.metadata) ? prev.columnMapping.metadata : []
+        };
+        // Nettoyage des anciennes clés
+        const { text, title, ...rest } = prev.columnMapping;
+        return {
+          ...prev,
+          columnMapping: { ...newMapping }
+        };
+      });
+    }
+  }, [isSessionLoaded, session.columnMapping, setSession]);
+
+  // Récupération automatique des headers si manquants (v1.6.6)
+  // On priorise rawCsvData puis la reconstruction sémantique
+  useEffect(() => {
+    if (isSessionLoaded && session.entreprises.length > 0 && (!session.csvHeaders || session.csvHeaders.length === 0)) {
+      if (session.rawCsvData && session.rawCsvData.length > 0) {
+        console.log("Restauration des en-têtes depuis les données brutes...");
+        setSession(prev => ({ ...prev, csvHeaders: Object.keys(prev.rawCsvData[0]) }));
+      } else {
+        console.log("Reconstruction sémantique des en-têtes (Schéma limité)...");
+        const first = session.entreprises[0];
+        const recoveredHeaders = new Set();
+        if (session.columnMapping.id) recoveredHeaders.add(session.columnMapping.id);
+        if (first.texts) first.texts.forEach(t => { if (t.title) recoveredHeaders.add(t.title); });
+        if (first.metadata) Object.keys(first.metadata).forEach(k => recoveredHeaders.add(k));
+        
+        if (recoveredHeaders.size > 0) {
+          setSession(prev => ({ ...prev, csvHeaders: Array.from(recoveredHeaders) }));
+        }
+      }
+    }
+  }, [isSessionLoaded, session.entreprises, session.csvHeaders, session.rawCsvData, session.columnMapping.id, setSession]);
+
   const [papaLoaded, setPapaLoaded] = useState(false);
 
   // Charger PapaParse globalement
@@ -47,7 +93,7 @@ export default function ManualTagger() {
   useEffect(() => {
     if (!isSessionLoaded) return;
 
-    // Check migration if IndexedDB is empty
+    // Vérification de la migration si IndexedDB est vide
     if (session.entreprises.length === 0) {
       const oldStore = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (oldStore) {
@@ -83,7 +129,7 @@ export default function ManualTagger() {
         </div>
         <div className="text-center">
           <h1 className="text-white text-2xl font-black tracking-tighter mb-1">BA7ATH <span className="text-red-500">OSINT</span> TRACKER</h1>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-[0.2em]">v1.3 — Initialisation...</p>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-[0.2em]">v1.6.0 — Initialisation...</p>
         </div>
       </div>
     );
@@ -125,13 +171,16 @@ export default function ManualTagger() {
       };
     }).filter(c => c.texts.length > 0);
 
-    setSession(prev => ({
-      ...prev,
-      entreprises: formattedData,
-      columnMapping: finalMapping,
-      categories: finalCategories,
-      highlightRules: finalRules
-    }));
+      setSession(prev => ({
+        ...prev,
+        entreprises: formattedData,
+        columnMapping: finalMapping,
+        categories: finalCategories,
+        highlightRules: finalRules,
+        // CRUCIAL : Ne pas perdre les données brutes !
+        rawCsvData: prev.rawCsvData,
+        csvHeaders: prev.csvHeaders
+      }));
 
     setIsCsvLoaded(true);
     setConfigStep(false);
@@ -145,7 +194,7 @@ export default function ManualTagger() {
     }
   };
 
-  // === SESSION IMPORT (Phase 8) ===
+  // === IMPORT DE SESSION (Phase 8) ===
   const handleSessionImport = (data) => {
     setSession({
       ...session,
@@ -166,6 +215,14 @@ export default function ManualTagger() {
     return <UploadView onDataParsed={handleDataParsed} papaLoaded={papaLoaded} onSessionImport={handleSessionImport} />;
   }
 
+  const handleUpdateRawData = (headers, data) => {
+    setSession(prev => ({
+      ...prev,
+      csvHeaders: headers,
+      rawCsvData: data
+    }));
+  };
+
   if (configStep) {
     return (
       <ConfigureView 
@@ -175,6 +232,7 @@ export default function ManualTagger() {
         highlightRules={session.highlightRules}
         onCancel={() => setConfigStep(false)}
         onConfirm={confirmConfiguration}
+        onUpdateRawData={handleUpdateRawData}
         isEditing={isCsvLoaded}
       />
     );

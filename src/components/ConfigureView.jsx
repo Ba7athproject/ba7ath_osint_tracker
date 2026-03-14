@@ -8,9 +8,10 @@ export default function ConfigureView({
   highlightRules: initialRules = { capitals: true, acronyms: false, legal: false }, 
   onCancel, 
   onConfirm, 
+  onUpdateRawData,
   isEditing 
 }) {
-  // Local States for snappier UI (fixes the "frozen" issue)
+  // États locaux avec priorité (Point S - v1.6.3/1.6.6)
   const [localMapping, setLocalMapping] = useState(initialMapping);
   const [localCategories, setLocalCategories] = useState(initialCategories);
   const [localRules, setLocalRules] = useState(initialRules);
@@ -19,21 +20,10 @@ export default function ConfigureView({
   const [newCatColor, setNewCatColor] = useState('bg-slate-700');
   const [newCatIcon, setNewCatIcon] = useState('Tag');
   const [showIconPicker, setShowIconPicker] = useState(false);
-  const [templateStatus, setTemplateStatus] = useState(null); // { type: 'success'|'error', msg }
+  const [templateStatus, setTemplateStatus] = useState(null); 
+  
+  const isInitializedRef = useRef(false);
   const fileInputRef = useRef(null);
-
-  // Synchronisation avec les props (important pour le flux d'upload)
-  useEffect(() => {
-    setLocalMapping(initialMapping);
-  }, [initialMapping]);
-
-  useEffect(() => {
-    setLocalCategories(initialCategories);
-  }, [initialCategories]);
-
-  useEffect(() => {
-    setLocalRules(initialRules);
-  }, [initialRules]);
 
   const availableIcons = {
     Tag, Building2, ShieldAlert, User, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText
@@ -41,7 +31,17 @@ export default function ConfigureView({
 
   const IconComponent = availableIcons[newCatIcon] || Tag;
 
-  // Handlers for local state
+  // Synchronisation sécurisée (Point SYNC)
+  useEffect(() => {
+    if (!isInitializedRef.current && (initialMapping?.textColumns?.length > 0 || initialCategories?.length > 0)) {
+      setLocalMapping(initialMapping);
+      setLocalCategories(initialCategories);
+      setLocalRules(initialRules);
+      isInitializedRef.current = true;
+    }
+  }, [initialMapping, initialCategories, initialRules]);
+
+  // Gestionnaires pour l'état local
   const handleToggleMetadata = (header) => {
     setLocalMapping(prev => {
       const metadata = prev.metadata || [];
@@ -72,15 +72,15 @@ export default function ConfigureView({
     if (!newCatName.trim()) return;
     const id = newCatName.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '_').toLowerCase();
     
-    if (localCategories.some(c => c.id === id || c.name.toLowerCase() === newCatName.trim().toLowerCase())) {
-      alert("Une catégorie avec ce nom existe déjà.");
-      return;
-    }
-
-    setLocalCategories([
-      ...localCategories,
-      { id, name: newCatName.trim(), color: newCatColor, icon: newCatIcon }
-    ]);
+    setLocalCategories(prev => {
+      const exists = prev.find(c => c.id === id || c.name.toLowerCase() === newCatName.trim().toLowerCase());
+      if (exists) {
+        // Mise à jour (Upsert)
+        return prev.map(c => c.id === exists.id ? { ...c, color: newCatColor, icon: newCatIcon, name: newCatName.trim() } : c);
+      }
+      // Ajout
+      return [...prev, { id, name: newCatName.trim(), color: newCatColor, icon: newCatIcon }];
+    });
     setNewCatName('');
   };
 
@@ -92,7 +92,7 @@ export default function ConfigureView({
     setLocalCategories(localCategories.filter(c => c.id !== idToRemove));
   };
 
-  // === TEMPLATE SAVE ===
+  // === SAUVEGARDE DU MODÈLE ===
   const handleSaveTemplate = () => {
     const template = {
       _type: 'ba7ath-template',
@@ -113,7 +113,7 @@ export default function ConfigureView({
     setTimeout(() => setTemplateStatus(null), 3000);
   };
 
-  // === TEMPLATE LOAD ===
+  // === CHARGEMENT DU MODÈLE ===
   const handleLoadTemplate = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -140,6 +140,41 @@ export default function ConfigureView({
     e.target.value = '';
   };
 
+  const handleUpdateCSV = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !onUpdateRawData) return;
+
+    if (file.name.endsWith('.csv')) {
+      window.Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          if (results.data && results.data.length > 0) {
+            const headers = Object.keys(results.data[0]);
+            onUpdateRawData(headers, results.data);
+            alert("Schéma CSV restauré ! Vous avez accès à toutes les colonnes.");
+          }
+        }
+      });
+    } else if (file.name.endsWith('.xlsx')) {
+      try {
+        const XLSX = await import('xlsx');
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data);
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+        if (jsonData.length > 0) {
+          const headers = Object.keys(jsonData[0]);
+          onUpdateRawData(headers, jsonData);
+          alert("Schéma Excel restauré ! Vous avez accès à toutes les colonnes.");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Erreur lors de la lecture du fichier Excel.");
+      }
+    }
+  };
+
   const colorOptions = [
     { label: 'Gris', class: 'bg-slate-700' },
     { label: 'Rouge', class: 'bg-red-600' },
@@ -152,8 +187,8 @@ export default function ConfigureView({
   ];
 
   return (
-    <div className="min-h-screen bg-animated-gradient flex flex-col items-center justify-center font-sans text-slate-900 dark:text-slate-100 p-6 pt-10 pb-20 transition-colors duration-300">
-      <div className="glass-card p-8 rounded-2xl max-w-2xl w-full animate-scale-in">
+    <div className="min-h-screen bg-animated-gradient flex flex-col items-center justify-start font-sans text-slate-900 dark:text-slate-100 p-4 sm:p-6 pt-10 pb-24 transition-colors duration-300 overflow-y-auto">
+      <div className="glass-card p-5 sm:p-8 rounded-2xl max-w-2xl w-full animate-scale-in my-auto">
         <div className="flex items-center gap-3 mb-6 border-b border-slate-200/50 dark:border-slate-700 pb-4">
           <div className="w-10 h-10 rounded-xl bg-red-600/10 dark:bg-red-500/15 flex items-center justify-center">
             <Settings className="text-red-600 dark:text-red-500 w-5 h-5" />
@@ -161,11 +196,21 @@ export default function ConfigureView({
           <h2 className="text-2xl font-black dark:text-white tracking-tight">Configuration du Projet</h2>
         </div>
 
-        {/* Section 1: CSV Mapping */}
+        {/* Section 1 : Correspondance CSV (Mapping) */}
         <div className="mb-10">
-          <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800 dark:text-slate-200">
-            <Database className="w-5 h-5 text-slate-500" />
-            Mapping des données ({(csvHeaders || []).length} colonnes trouvées)
+          <h3 className="text-lg font-bold mb-4 flex items-center justify-between gap-2 text-slate-800 dark:text-slate-200">
+            <div className="flex items-center gap-2">
+              <Database className="w-5 h-5 text-slate-500" />
+              Mapping des données ({(csvHeaders || []).length} colonnes trouvées)
+            </div>
+            
+            {isEditing && (
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer transition-all shadow-md active:scale-95">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Rétablir Colonnes</span>
+                <input type="file" accept=".csv,.xlsx" className="hidden" onChange={handleUpdateCSV} />
+              </label>
+            )}
           </h3>
           <div className="space-y-4 bg-slate-50 dark:bg-slate-900/50 p-5 rounded-lg border border-slate-200 dark:border-slate-700">
             {/* 1. Identifiant Unique */}
@@ -192,7 +237,6 @@ export default function ConfigureView({
               
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {csvHeaders
-                  .filter(h => h !== localMapping.id)
                   .map(header => {
                     const isChecked = (localMapping.textColumns || []).includes(header);
                     return (
@@ -217,7 +261,7 @@ export default function ConfigureView({
               </div>
             </div>
 
-            {/* Dynamic Metadata Checkboxes */}
+            {/* Cases à cocher des métadonnées dynamiques */}
             <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
               <label className="block text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
                 3. Métadonnées de Contexte (Optionnelles)
@@ -226,7 +270,6 @@ export default function ConfigureView({
               
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {csvHeaders
-                  .filter(h => h !== localMapping.id && !(localMapping.textColumns || []).includes(h))
                   .map(header => {
                     const isChecked = (localMapping.metadata || []).includes(header);
                     return (
@@ -253,7 +296,7 @@ export default function ConfigureView({
           </div>
         </div>
 
-        {/* Highlighting Rules */}
+        {/* Règles de surlignage */}
         <div className="mb-10">
           <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800 dark:text-slate-200">
             <Settings className="w-5 h-5 text-slate-500" />
@@ -287,7 +330,7 @@ export default function ConfigureView({
           </div>
         </div>
 
-        {/* Categories */}
+        {/* Catégories */}
         <div>
           <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800 dark:text-slate-200">
             <Tag className="w-5 h-5 text-slate-500" />
@@ -298,13 +341,22 @@ export default function ConfigureView({
               {localCategories.map((cat, index) => {
                 const CatIcon = availableIcons[cat.icon] || Tag;
                 return (
-                  <div key={cat.id} className="flex items-center justify-between bg-white dark:bg-slate-800 p-3 rounded-md border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <div 
+                    key={cat.id} 
+                    className="flex items-center justify-between bg-white dark:bg-slate-800 p-3 rounded-md border border-slate-200 dark:border-slate-700 shadow-sm group hover:border-red-400 transition-colors cursor-pointer"
+                    onClick={() => {
+                      setNewCatName(cat.name);
+                      setNewCatColor(cat.color);
+                      setNewCatIcon(cat.icon);
+                    }}
+                    title="Cliquer pour modifier"
+                  >
                     <div className="flex items-center gap-3">
                       <span className="text-xs font-mono text-slate-400 w-4 text-center">{index + 1}</span>
                       <div className={`p-1.5 rounded-md text-white ${cat.color}`}>
                         <CatIcon className="w-4 h-4" />
                       </div>
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">{cat.name}</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200 group-hover:text-red-500">{cat.name}</span>
                     </div>
                     <button onClick={() => handleRemoveCategory(cat.id)} className="text-slate-400 hover:text-red-500 p-1.5 rounded transition">
                       <Trash2 className="w-4 h-4" />
@@ -334,7 +386,7 @@ export default function ConfigureView({
           </div>
         </div>
 
-        {/* Footer actions */}
+        {/* Actions de pied de page (Footer) */}
         <div className="mt-10 pt-6 border-t border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-3 mb-5">
             <button onClick={handleSaveTemplate} className="text-sm px-4 py-2 rounded-md bg-slate-100 dark:bg-slate-700 border flex items-center gap-2"><Download className="w-4 h-4"/> Sauvegarder</button>

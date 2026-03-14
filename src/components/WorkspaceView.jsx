@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X, Settings } from 'lucide-react';
+import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X, Settings, Brain, Sparkles, Loader2, Check, XCircle } from 'lucide-react';
 
 import ExportModal from './ExportModal';
 import StatsPanel from './StatsPanel';
+import { useNerEngine } from '../hooks/useNerEngine';
 
 // Constantes stables pour éviter les boucles de rendu infinies (Maximum update depth exceeded)
 const EMPTY_ARRAY = [];
@@ -16,18 +17,18 @@ const availableIcons = {
 
 const normalizeEntityName = (name) => {
   if (!name) return '';
-  // Noise words including conjunctions
+  // Mots vides (noise words) incluant les conjonctions
   const noiseWords = new Set(['the', 'of', 'and', 'a', 'an', 'in', 'on', 'at', 'for', 'with', 'by', 'et', '&']);
   
   return name
     .toLowerCase()
     .trim()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/[.,;:"'!?(){}[\]&]/g, ' ') // Replace punctuation (added &) with space
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Suppression des accents
+    .replace(/[.,;:"'!?(){}[\]&]/g, ' ') // Remplacement de la ponctuation (incluant &) par des espaces
     .split(/\s+/)
     .filter(token => token.length > 0 && !noiseWords.has(token))
     .map(token => {
-      // Basic singularization: remove trailing 's' if token length > 3
+      // Singularisation basique : suppression du 's' final si la longueur du jeton est > 3
       if (token.length > 3 && token.endsWith('s')) {
         return token.slice(0, -1);
       }
@@ -54,7 +55,7 @@ const getLevenshteinDistance = (a, b) => {
           matrix[i - 1][j - 1] + 1, // substitution
           Math.min(
             matrix[i][j - 1] + 1, // insertion
-            matrix[i - 1][j] + 1  // deletion
+            matrix[i - 1][j] + 1  // suppression
           )
         );
       }
@@ -63,7 +64,7 @@ const getLevenshteinDistance = (a, b) => {
   return matrix[b.length][a.length];
 };
 
-const LazyTextChunk = ({ content, renderFn }) => {
+const LazyTextChunk = React.memo(({ content, renderFn }) => {
   const [isVisible, setIsVisible] = useState(false);
   const chunkRef = useRef(null);
 
@@ -97,7 +98,7 @@ const LazyTextChunk = ({ content, renderFn }) => {
       )}
     </p>
   );
-};
+});
 
 export default function WorkspaceView({
   entreprises = EMPTY_ARRAY,
@@ -110,7 +111,23 @@ export default function WorkspaceView({
   resetSession,
   onOpenConfig
 }) {
+  // === MOTEUR NER ===
+  const {
+    modelStatus, loadProgress, loadFile, errorMessage,
+    initModel, analyzeDoc, getDocSuggestions,
+    validateSuggestion, dismissSuggestion, dismissAll,
+    MapsSuggestions, activeSuggestionIndex, setActiveSuggestionIndex,
+    analyzingDocId, analysisProgress, suggestions, clearAllSuggestions
+  } = useNerEngine(categories);
+
+  const [nerEnabled, setNerEnabled] = useState(false);
   const currentCompany = entreprises[currentIndex];
+
+  // Récupération des suggestions NER pour le document actuel
+  const currentNerSuggestions = useMemo(() => {
+    if (!currentCompany || !nerEnabled) return [];
+    return suggestions[currentCompany.uuid] || [];
+  }, [currentCompany, nerEnabled, suggestions]);
 
   /**
    * splitIntoParagraphs — Découpage intelligent pour la virtualisation.
@@ -126,14 +143,14 @@ export default function WorkspaceView({
       if (para.length <= maxParaLength) {
         result.push(para);
       } else {
-        // Sub-chunk at word boundaries
+        // Sous-découpage aux frontières de mots
         let start = 0;
         while (start < para.length) {
           let end = start + maxParaLength;
           if (end < para.length) {
             // Walk back to the nearest space so we don't cut a word
             while (end > start && para[end] !== ' ') end--;
-            if (end === start) end = start + maxParaLength; // no space found, hard cut
+            if (end === start) end = start + maxParaLength; // aucun espace trouvé, découpage forcé
           }
           result.push(para.slice(start, end).trim());
           start = end + 1;
@@ -142,6 +159,24 @@ export default function WorkspaceView({
     }
     return result;
   }, []);
+
+  // Mise en cache (memoization) des paragraphes pour éviter le re-découpage à chaque rafraîchissement
+  const currentParagraphs = useMemo(() => {
+    if (!currentCompany) return [];
+    if (currentCompany.texts) {
+      return currentCompany.texts.map(block => ({
+        title: block.title,
+        paras: splitIntoParagraphs(block.content)
+      }));
+    }
+    if (currentCompany.text) {
+      return [{
+        title: null,
+        paras: splitIntoParagraphs(currentCompany.text)
+      }];
+    }
+    return [];
+  }, [currentCompany, splitIntoParagraphs]);
 
   const progress =
     entreprises.length > 0
@@ -263,77 +298,86 @@ export default function WorkspaceView({
     const existing = extractedEntities[currentCompany.uuid] || [];
     return existing.some(e => normalizeEntityName(e.name) === normInput);
   }, [currentEntityName, currentCompany, extractedEntities]);
+  
+  const detectConflict = useCallback((name, type, note, suggestionIndex = null) => {
+    if (!name.trim() || !currentCompany) return null;
 
-  const handleAddEntity = useCallback((force = false) => {
-    if (!currentEntityName.trim() || !currentCompany) return;
-
-    const cleanName = currentEntityName.trim();
+    const cleanName = name.trim();
     const normalizedClean = normalizeEntityName(cleanName);
 
-    // --- PHASE 1: LOCAL SCAN (Current record) ---
+    // 1. LOCAL SCAN
     const existingInDoc = extractedEntities[currentCompany.uuid] || [];
-    // Search for normalized match OR fuzzy match (distance <= 2)
     const localConflict = existingInDoc.find((e) => {
       const normE = normalizeEntityName(e.name);
       if (normE === normalizedClean) return true;
-      // Fuzzy check only for reasonably long names to avoid false positives on short ones
       if (normalizedClean.length > 3 && normE.length > 3) {
         return getLevenshteinDistance(normalizedClean, normE) <= 2;
       }
       return false;
     });
 
-    if (localConflict && !force) {
-      setPendingConflict({
+    if (localConflict) {
+      return {
         newName: cleanName,
         existingEntity: localConflict,
-        type: currentEntityType,
-        note: currentEntityNote.trim() || '',
+        type,
+        note: note.trim() || '',
         scope: 'local',
-        origin: 'Cet enregistrement'
-      });
-      return;
+        origin: 'Cet enregistrement',
+        suggestionIndex
+      };
     }
 
-    // --- PHASE 2: GLOBAL SCAN (Rest of the project) ---
-    if (!force) {
-      const globalMatch = Object.entries(extractedEntities).find(([uuid, entities]) => {
-        if (uuid === currentCompany.uuid) return false;
-        return entities.some(e => {
-          const normE = normalizeEntityName(e.name);
-          if (normE === normalizedClean) return true;
-          if (normalizedClean.length > 3 && normE.length > 3) {
-            return getLevenshteinDistance(normalizedClean, normE) <= 2;
-          }
-          return false;
-        });
-      });
-
-      if (globalMatch) {
-        const [originUuid, entities] = globalMatch;
-        const globalConflict = entities.find(e => {
-          const normE = normalizeEntityName(e.name);
-          if (normE === normalizedClean) return true;
-          if (normalizedClean.length > 3 && normE.length > 3) {
-            return getLevenshteinDistance(normalizedClean, normE) <= 2;
-          }
-          return false;
-        });
-        
-        // STRICT BYPASS: Only if the string is 100% identical (including case)
-        const isStrictIdentical = globalConflict.name === cleanName;
-        
-        if (!isStrictIdentical) {
-          setPendingConflict({
-            newName: cleanName,
-            existingEntity: globalConflict,
-            type: currentEntityType,
-            note: currentEntityNote.trim() || '',
-            scope: 'global',
-            origin: originUuid
-          });
-          return;
+    // 2. GLOBAL SCAN
+    const globalMatch = Object.entries(extractedEntities).find(([uuid, entities]) => {
+      if (uuid === currentCompany.uuid) return false;
+      return entities.some(e => {
+        const normE = normalizeEntityName(e.name);
+        if (normE === normalizedClean) return true;
+        if (normalizedClean.length > 3 && normE.length > 3) {
+          return getLevenshteinDistance(normalizedClean, normE) <= 2;
         }
+        return false;
+      });
+    });
+
+    if (globalMatch) {
+      const [originUuid, entities] = globalMatch;
+      const globalConflict = entities.find(e => {
+        const normE = normalizeEntityName(e.name);
+        if (normE === normalizedClean) return true;
+        if (normalizedClean.length > 3 && normE.length > 3) {
+          return getLevenshteinDistance(normalizedClean, normE) <= 2;
+        }
+        return false;
+      });
+      
+      const isStrictIdentical = globalConflict.name === cleanName;
+      
+      if (!isStrictIdentical) {
+        return {
+          newName: cleanName,
+          existingEntity: globalConflict,
+          type,
+          note: note.trim() || '',
+          scope: 'global',
+          origin: originUuid,
+          suggestionIndex
+        };
+      }
+    }
+
+    return null;
+  }, [currentCompany, extractedEntities]);
+
+  const handleAddEntity = useCallback((force = false) => {
+    if (!currentEntityName.trim() || !currentCompany) return;
+
+    if (!force) {
+      const conflict = detectConflict(currentEntityName, currentEntityType, currentEntityNote);
+      if (conflict) {
+        setPendingConflict(conflict);
+        return;
       }
     }
 
@@ -344,7 +388,7 @@ export default function WorkspaceView({
         [currentCompany.uuid]: [
           ...currentList,
           {
-            name: cleanName,
+            name: currentEntityName.trim(),
             type: currentEntityType,
             note: currentEntityNote.trim() || '',
           },
@@ -360,7 +404,7 @@ export default function WorkspaceView({
   const handleResolveConflict = (resolution) => {
     if (!pendingConflict || !currentCompany) return;
 
-    const { newName, existingEntity, type, note, scope } = pendingConflict;
+    const { newName, existingEntity, type, note, scope, suggestionIndex } = pendingConflict;
 
     setExtractedEntities((prev) => {
       const existingInDoc = [...(prev[currentCompany.uuid] || [])];
@@ -388,16 +432,12 @@ export default function WorkspaceView({
       };
     });
 
-    setPendingConflict(null);
-    
-    // Check for global conflicts only if we chose "keep-both" in a local context
-    if (resolution === 'keep-both' && scope === 'local') {
-      // Re-trigger handleAddEntity with force=true to skip local check but check global?
-      // Actually, handleAddEntity(true) will just add it.
-      // Better: trigger a manual check or let handleAddEntity handle it.
-      // For now, let's keep it simple: if local is resolved, we are done.
+    // Finalize NER if it was a suggestion
+    if (suggestionIndex !== null && suggestionIndex !== undefined) {
+      validateSuggestion(currentCompany.uuid, suggestionIndex);
     }
 
+    setPendingConflict(null);
     setCurrentEntityName('');
     setCurrentEntityNote('');
     if (entityInputRef.current) entityInputRef.current.focus();
@@ -408,12 +448,33 @@ export default function WorkspaceView({
   const currentIndexRef = useRef(currentIndex);
   const entreprisesRef = useRef(entreprises);
   const currentEntityTypeRef = useRef(currentEntityType);
+  const currentEntityNameRef = useRef(currentEntityName);
+  const currentCompanyIdRef = useRef(currentCompany?.uuid);
+  const handleValidateNerRef = useRef(null);
+  const handleDismissNerRef = useRef(null);
+  const handleMapsSuggestionsRef = useRef(null);
+  const nerSuggestionsRef = useRef(currentNerSuggestions);
+  const activeSuggestionIndexRef = useRef(activeSuggestionIndex);
+  const nerEnabledRef = useRef(nerEnabled);
 
   useEffect(() => { handleAddEntityRef.current = handleAddEntity; }, [handleAddEntity]);
   useEffect(() => { categoriesRef.current = categories; }, [categories]);
   useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
   useEffect(() => { entreprisesRef.current = entreprises; }, [entreprises]);
   useEffect(() => { currentEntityTypeRef.current = currentEntityType; }, [currentEntityType]);
+  useEffect(() => { currentEntityNameRef.current = currentEntityName; }, [currentEntityName]);
+  useEffect(() => { currentCompanyIdRef.current = currentCompany?.uuid; }, [currentCompany]);
+  useEffect(() => { handleMapsSuggestionsRef.current = MapsSuggestions; }, [MapsSuggestions]);
+  useEffect(() => { nerSuggestionsRef.current = currentNerSuggestions; }, [currentNerSuggestions]);
+  useEffect(() => { activeSuggestionIndexRef.current = activeSuggestionIndex; }, [activeSuggestionIndex]);
+  useEffect(() => { nerEnabledRef.current = nerEnabled; }, [nerEnabled]);
+
+  const handleReset = () => {
+    if (window.confirm('Voulez-vous vraiment réinitialiser la session ?')) {
+      resetSession();
+      clearAllSuggestions();
+    }
+  };
 
   useEffect(() => {
     const blockAltCode = (e) => {
@@ -470,11 +531,42 @@ export default function WorkspaceView({
       }
 
       if (e.key === 'Enter') {
+        // NER : Si des suggestions sont actives et l'une d'elles est focalisée, validation de celle-ci
+        if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
+          if (!isInEntityInput || !currentEntityNameRef.current) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            handleValidateNerRef.current(activeSuggestionIndexRef.current);
+            return;
+          }
+        }
+
         const isBodyOrWorkspace = activeEl.tagName === 'BODY' || activeEl.closest('.workspace-container');
         if (isInEntityInput || isBodyOrWorkspace) {
           e.preventDefault();
           e.stopImmediatePropagation();
           handleAddEntityRef.current();
+        }
+      }
+
+      // NER : Touche Échap pour rejeter la suggestion focalisée
+      if (e.key === 'Escape') {
+        if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          handleDismissNerRef.current(activeSuggestionIndexRef.current);
+          return;
+        }
+      }
+
+      // NER : Touche Tab pour parcourir les suggestions (Audit Point A)
+      if (e.key === 'Tab' && nerEnabledRef.current && nerSuggestionsRef.current.length > 0) {
+        if (!isInEntityInput && !isInSearch && !isInTextArea && !isInSelect) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          const direction = e.shiftKey ? 'prev' : 'next';
+          handleMapsSuggestionsRef.current(direction, currentCompanyIdRef.current);
+          return;
         }
       }
 
@@ -534,9 +626,240 @@ export default function WorkspaceView({
     };
   }, [highlightRules]);
 
+  // Ensemble des noms d'entités validées pour le document actuel (pour le surlignage rouge)
+  const validatedEntityNames = useMemo(() => {
+    if (!currentCompany) return new Set();
+    const entities = extractedEntities[currentCompany.uuid] || [];
+    return new Set(entities.map(e => e.name.toLowerCase()));
+  }, [currentCompany, extractedEntities]);
+
+  // Gestion de la bascule NER IA
+  const handleNerToggle = useCallback(async () => {
+    if (modelStatus === 'idle' || modelStatus === 'error') {
+      setNerEnabled(true);
+      const ok = await initModel();
+      if (ok && currentCompany?.texts) {
+        analyzeDoc(currentCompany.uuid, currentCompany.texts);
+      }
+    } else if (modelStatus === 'ready') {
+      setNerEnabled(prev => !prev);
+      if (!nerEnabled && currentCompany?.texts) {
+        analyzeDoc(currentCompany.uuid, currentCompany.texts);
+      }
+    }
+  }, [modelStatus, initModel, nerEnabled, currentCompany, analyzeDoc]);
+
+  // Analyse automatique lors du changement de document (si NER activé et modèle prêt)
+  useEffect(() => {
+    setActiveSuggestionIndex(0); // Reset focus when navigating
+    if (nerEnabled && modelStatus === 'ready' && currentCompany?.texts) {
+      // CORRECTION : Vérification de l'existence de la clé dans les suggestions
+      // Cela évite de relancer l'analyse si l'utilisateur a déjà validé toutes les suggestions (longueur 0)
+      if (suggestions[currentCompany.uuid] === undefined && analyzingDocId !== currentCompany.uuid) {
+        analyzeDoc(currentCompany.uuid, currentCompany.texts);
+      }
+    }
+  }, [currentIndex, nerEnabled, modelStatus, setActiveSuggestionIndex, analyzeDoc, currentCompany, suggestions, analyzingDocId]);
+
+  // Gestion de la validation d'une suggestion NER (touche Entrée ou clic)
+  const handleValidateNerSuggestion = useCallback((index) => {
+    if (!currentCompany) return;
+    const docSuggestions = suggestions[currentCompany.uuid] || [];
+    const suggestion = docSuggestions[index];
+    if (!suggestion) return;
+
+    // --- VÉRIFICATION DES DOUBLONS (Point K) ---
+    const conflict = detectConflict(suggestion.word, suggestion.suggestedCategory, suggestion.description, index);
+    if (conflict) {
+      setPendingConflict(conflict);
+      return;
+    }
+
+    const entity = validateSuggestion(currentCompany.uuid, index);
+    if (entity) {
+      setExtractedEntities(prev => {
+        const currentList = prev[currentCompany.uuid] || [];
+        return {
+          ...prev,
+          [currentCompany.uuid]: [...currentList, entity],
+        };
+      });
+    }
+  }, [currentCompany, suggestions, detectConflict, validateSuggestion, setExtractedEntities]);
+
+  // Gestion du rejet d'une suggestion NER (touche Échap ou clic)
+  const handleDismissNerSuggestion = useCallback((index) => {
+    if (!currentCompany) return;
+    dismissSuggestion(currentCompany.uuid, index);
+  }, [currentCompany, dismissSuggestion]);
+
+  // Synchronisation des références des gestionnaires NER après leurs déclarations
+  useEffect(() => { handleValidateNerRef.current = handleValidateNerSuggestion; }, [handleValidateNerSuggestion]);
+  useEffect(() => { handleDismissNerRef.current = handleDismissNerSuggestion; }, [handleDismissNerSuggestion]);
+
   const renderHighlightedText = useCallback(
     (text) => {
-      if (!text || !highlightRegexInfo) return <span>{text}</span>;
+      if (!text) return <span>{text}</span>;
+
+      // Construction de la carte de surbrillance NER pour ce bloc de texte
+      const nerSpans = [];
+      if (nerEnabled && currentNerSuggestions.length > 0) {
+        for (const suggestion of currentNerSuggestions) {
+          const word = suggestion.word;
+          // 🛡️ BCL MÉMOIRE : Ignorer les hallucinations IA (chaînes vides) qui causent l'OOM
+          if (!word || typeof word !== 'string' || word.trim() === '') continue;
+          
+          let searchFrom = 0;
+          while (searchFrom < text.length) {
+            const idx = text.indexOf(word, searchFrom);
+            if (idx === -1) break;
+            nerSpans.push({
+              start: idx,
+              end: idx + word.length,
+              suggestion,
+              type: 'suggestion',
+            });
+            searchFrom = idx + word.length;
+          }
+        }
+      }
+
+      // Vérification des correspondances avec les noms d'entités déjà validés
+      if (validatedEntityNames.size > 0) {
+        const entities = extractedEntities[currentCompany?.uuid] || [];
+        for (const entity of entities) {
+          const word = entity.name;
+          // 🛡️ BCL MÉMOIRE : Ignorer les saisies invalides
+          if (!word || typeof word !== 'string' || word.trim() === '') continue;
+
+          let searchFrom = 0;
+          while (searchFrom < text.length) {
+            const idx = text.indexOf(word, searchFrom);
+            if (idx === -1) break;
+            // Pas d'ajout si déjà couvert par un segment de suggestion NER
+            const alreadyCovered = nerSpans.some(
+              s => s.start <= idx && s.end >= idx + word.length
+            );
+            if (!alreadyCovered) {
+              nerSpans.push({
+                start: idx,
+                end: idx + word.length,
+                entity,
+                type: 'validated',
+              });
+            }
+            searchFrom = idx + word.length;
+          }
+        }
+      }
+
+      // Tri des segments par position de début, priorité aux éléments validés sur les suggestions
+      nerSpans.sort((a, b) => a.start - b.start || (a.type === 'validated' ? -1 : 1));
+
+      // Suppression des segments chevauchants (conservation du premier)
+      const cleanSpans = [];
+      let lastEnd = 0;
+      for (const span of nerSpans) {
+        if (span.start >= lastEnd) {
+          cleanSpans.push(span);
+          lastEnd = span.end;
+        }
+      }
+
+      // Si des segments NER existent, rendu avec surbrillance dédiée
+      if (cleanSpans.length > 0) {
+        const fragments = [];
+        let pos = 0;
+
+        for (let i = 0; i < cleanSpans.length; i++) {
+          const span = cleanSpans[i];
+
+          // Texte situé avant ce segment
+          if (pos < span.start) {
+            const beforeText = text.slice(pos, span.start);
+            // Application du surlignage regex au texte hors suggestions NER
+            if (highlightRegexInfo) {
+              const { combinedRegex, testRegex } = highlightRegexInfo;
+              const regParts = beforeText.split(combinedRegex);
+              regParts.forEach((part, ri) => {
+                if (!part) return;
+                if (testRegex.test(part) || part.match(combinedRegex)) {
+                  fragments.push(
+                    <span key={`r-${pos}-${ri}`} className="bg-red-100 text-red-900 border-b-2 border-red-300 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800 font-bold px-1 rounded-sm mx-px transition-colors hover:bg-red-200 dark:hover:bg-red-800/50" title="Entité potentielle détectée">{part}</span>
+                  );
+                } else {
+                  fragments.push(<span key={`t-${pos}-${ri}`}>{part}</span>);
+                }
+              });
+            } else {
+              fragments.push(<span key={`t-${pos}`}>{beforeText}</span>);
+            }
+          }
+
+          // Le segment NER lui-même
+          const spanText = text.slice(span.start, span.end);
+          if (span.type === 'validated') {
+            fragments.push(
+              <span key={`v-${i}`} className="ner-validated" title={`✓ ${span.entity.name} — Validé`}>
+                {spanText}
+              </span>
+            );
+          } else {
+            const isActive = currentNerSuggestions.indexOf(span.suggestion) === activeSuggestionIndex;
+            const score = Math.round(span.suggestion.score);
+            const scoreClass = score > 80 ? 'ner-score-high' : score > 50 ? 'ner-score-mid' : 'ner-score-low';
+
+            fragments.push(
+              <span
+                key={`s-${i}`}
+                className={`ner-suggestion ${isActive ? 'ner-active ner-focused' : ''}`}
+                onClick={() => {
+                  const sIdx = currentNerSuggestions.indexOf(span.suggestion);
+                  if (sIdx !== -1) setActiveSuggestionIndex(sIdx);
+                }}
+              >
+                {spanText}
+                <span className="ner-tooltip">
+                  <span className="verbatim">{span.suggestion.word}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="font-bold text-slate-300">{span.suggestion.entity_group}</span>
+                    <span className={`reliability ${scoreClass}`}>Confiance : {score}%</span>
+                  </span>
+                  <span className="block mt-1 opacity-90 leading-relaxed text-slate-300">{span.suggestion.description}</span>
+                </span>
+              </span>
+            );
+          }
+
+          pos = span.end;
+        }
+
+        // Texte restant après le dernier segment
+        if (pos < text.length) {
+          const afterText = text.slice(pos);
+          if (highlightRegexInfo) {
+            const { combinedRegex, testRegex } = highlightRegexInfo;
+            const regParts = afterText.split(combinedRegex);
+            regParts.forEach((part, ri) => {
+              if (!part) return;
+              if (testRegex.test(part) || part.match(combinedRegex)) {
+                fragments.push(
+                  <span key={`r-end-${ri}`} className="bg-red-100 text-red-900 border-b-2 border-red-300 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800 font-bold px-1 rounded-sm mx-px transition-colors hover:bg-red-200 dark:hover:bg-red-800/50" title="Entité potentielle détectée">{part}</span>
+                );
+              } else {
+                fragments.push(<span key={`t-end-${ri}`}>{part}</span>);
+              }
+            });
+          } else {
+            fragments.push(<span key="t-end">{afterText}</span>);
+          }
+        }
+
+        return fragments;
+      }
+
+      // Repli : surlignage original par regex uniquement
+      if (!highlightRegexInfo) return <span>{text}</span>;
 
       const { combinedRegex, testRegex } = highlightRegexInfo;
       const parts = text.split(combinedRegex);
@@ -558,7 +881,7 @@ export default function WorkspaceView({
         return <span key={index}>{part}</span>;
       });
     },
-    [highlightRegexInfo]
+    [highlightRegexInfo, nerEnabled, currentNerSuggestions, validatedEntityNames, activeSuggestionIndex, extractedEntities, currentCompany]
   );
 
   const handleTextSelection = () => {
@@ -654,9 +977,10 @@ export default function WorkspaceView({
               <div>
                 <h1 className="text-xl font-black flex items-center gap-2 tracking-tight leading-none uppercase">
                   BA7ATH <span className="text-red-600">OSINT</span> TRACKER
+                  <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-red-600 text-white rounded font-black normal-case tracking-normal">v1.6</span>
                 </h1>
                 <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.2em] mt-1">
-                  v1.3 — Professional Edition
+                  Intelligence Artificielle Souveraine
                 </p>
               </div>
             </div>
@@ -704,7 +1028,42 @@ export default function WorkspaceView({
             )}
           </div>
 
-          <div className="flex gap-2 sm:gap-4 flex-wrap">
+          <div className="flex gap-2 sm:gap-4 flex-wrap items-center">
+            {/* Bouton du moteur NER IA */}
+            <div className="relative">
+              <button
+                onClick={handleNerToggle}
+                disabled={modelStatus === 'loading'}
+                className={`p-2 rounded-md border transition relative group ${
+                  nerEnabled && modelStatus === 'ready'
+                    ? 'bg-purple-600 border-purple-600 text-white shadow-lg shadow-purple-500/30'
+                    : modelStatus === 'loading'
+                    ? 'bg-purple-100 dark:bg-purple-900/30 border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 cursor-wait'
+                    : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:border-purple-400'
+                }`}
+                title={modelStatus === 'ready' ? (nerEnabled ? 'Désactiver le NER IA' : 'Activer le NER IA') : modelStatus === 'loading' ? 'Chargement du modèle...' : 'Charger le modèle NER IA'}
+              >
+                {modelStatus === 'loading' ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Brain className="w-5 h-5" />
+                )}
+                {modelStatus === 'ready' && nerEnabled && (
+                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-slate-900"></span>
+                )}
+              </button>
+              {modelStatus === 'loading' && (
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 z-50">
+                  <div className="bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-800 rounded-lg p-3 shadow-xl">
+                    <p className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-1.5">Chargement NER</p>
+                    <div className="ner-progress-bar">
+                      <div className="ner-progress-bar-fill" style={{ width: `${loadProgress}%` }}></div>
+                    </div>
+                    <p className="text-[9px] text-slate-500 dark:text-slate-400 mt-1 truncate">{loadFile || `${loadProgress}%`}</p>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               onClick={toggleDarkMode}
               className="p-2 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
@@ -728,7 +1087,7 @@ export default function WorkspaceView({
               <Settings className="w-4 h-4" /> <span className="hidden sm:inline">Config</span>
             </button>
             <button
-              onClick={resetSession}
+              onClick={handleReset}
               className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-600 dark:text-slate-300 px-3 py-2 rounded-md text-sm font-medium transition"
             >
               <Trash2 className="w-4 h-4" /> <span className="hidden sm:inline">Réinit</span>
@@ -765,7 +1124,7 @@ export default function WorkspaceView({
           </div>
         </div>
 
-        {/* PROGRESS BAR */}
+        {/* BARRE DE PROGRESSION */}
         <div className="w-full max-w-6xl mb-6 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -781,7 +1140,7 @@ export default function WorkspaceView({
           </div>
         </div>
 
-        {/* STATS PANEL */}
+        {/* PANNEAU DE STATISTIQUES */}
         {showStats && (
           <StatsPanel
             entreprises={entreprises}
@@ -820,32 +1179,28 @@ export default function WorkspaceView({
 
                 <div
                   ref={scrollContainerRef}
-                  className="flex flex-col gap-6 max-h-[50vh] overflow-y-auto pr-2"
+                  className="flex flex-col gap-6 max-h-[50vh] overflow-y-auto pr-8 custom-scrollbar"
                   onMouseUp={handleTextSelection}
                   onTouchEnd={handleTextSelection}
                 >
-                  {currentCompany?.texts && currentCompany.texts.map((textBlock, idx) => (
-                    <div key={idx} className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
-                      <div className="absolute top-0 left-0 bg-[#ffe066] dark:bg-amber-700 text-amber-900 dark:text-amber-100 text-xs font-bold px-3 py-1 rounded-br-lg rounded-tl-lg shadow-sm">
-                        {textBlock.title}
-                      </div>
+                  {currentParagraphs.map((block, bIdx) => (
+                    <div key={bIdx} className="bg-[#fffae6] dark:bg-amber-900/10 pt-14 pb-4 px-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
+                      {block.title && (
+                        <div className="absolute top-0 left-0 bg-[#ffe066] dark:bg-amber-700 text-amber-900 dark:text-amber-100 text-xs font-bold px-3 py-1 rounded-br-lg rounded-tl-lg shadow-sm">
+                          {block.title}
+                        </div>
+                      )}
                       <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4 h-full">
-                        {splitIntoParagraphs(textBlock.content).map((para, cIdx) => (
-                          <LazyTextChunk key={cIdx} content={para} renderFn={renderHighlightedText} />
+                        {block.paras.map((para, pIdx) => (
+                          <LazyTextChunk 
+                            key={`${currentCompany.uuid}-${bIdx}-${pIdx}`} 
+                            content={para} 
+                            renderFn={renderHighlightedText} 
+                          />
                         ))}
                       </div>
                     </div>
                   ))}
-
-                  {!currentCompany?.texts && currentCompany?.text && (
-                    <div className="bg-[#fffae6] dark:bg-amber-900/10 p-5 rounded-lg border border-[#ffe066] dark:border-amber-700/50 relative">
-                      <div className="prose prose-slate dark:prose-invert prose-lg max-w-none leading-relaxed cursor-text selection:bg-yellow-300 selection:text-slate-900 dark:selection:bg-yellow-500/80 dark:selection:text-slate-900 mt-4 h-full">
-                        {splitIntoParagraphs(currentCompany.text).map((para, cIdx) => (
-                          <LazyTextChunk key={cIdx} content={para} renderFn={renderHighlightedText} />
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -878,6 +1233,92 @@ export default function WorkspaceView({
                 <ShieldAlert className="w-5 h-5" /> Entités Ciblées
               </h2>
             </div>
+
+            {/* === PANNEAU DES SUGGESTIONS IA NER === */}
+            {nerEnabled && modelStatus === 'ready' && (
+              <div className="border-b border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-900/10">
+                <div className="p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-purple-500" />
+                    <span className="text-xs font-bold text-purple-700 dark:text-purple-400 uppercase tracking-wider">
+                      Suggestions IA ({currentNerSuggestions.length})
+                    </span>
+                    {analyzingDocId === currentCompany?.uuid && (
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 text-purple-500 animate-spin" />
+                        {analysisProgress.total > 0 && (
+                          <span className="text-[10px] text-purple-400 font-bold animate-pulse">
+                            {analysisProgress.current}/{analysisProgress.total}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {currentNerSuggestions.length > 0 && (
+                    <button
+                      onClick={() => currentCompany && dismissAll(currentCompany.uuid)}
+                      className="text-[10px] font-medium text-purple-500 hover:text-purple-700 dark:hover:text-purple-300 transition"
+                    >
+                      Tout ignorer
+                    </button>
+                  )}
+                </div>
+
+                {currentNerSuggestions.length > 0 ? (
+                  <div className="px-3 pb-3 space-y-2 max-h-[200px] overflow-y-auto">
+                    {currentNerSuggestions.map((suggestion, idx) => (
+                      <div
+                        key={`${suggestion.word}-${idx}`}
+                        className={`ner-suggestion-card p-2.5 rounded-lg border bg-white dark:bg-slate-800 ${
+                          idx === activeSuggestionIndex
+                            ? 'ner-card-active ner-focused'
+                            : 'border-purple-100 dark:border-purple-900/50'
+                        }`}
+                        style={{ animationDelay: `${idx * 60}ms` }}
+                        onClick={() => setActiveSuggestionIndex(idx)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                              {suggestion.word}
+                            </p>
+                            <p className="text-[10px] text-purple-600 dark:text-purple-400 font-medium mt-0.5">
+                              {suggestion.entity_group} — {suggestion.score}% confiance
+                            </p>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleValidateNerSuggestion(idx); }}
+                              className="p-1 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800/50 transition"
+                              title="Valider [Entrée]"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDismissNerSuggestion(idx); }}
+                              className="p-1 rounded bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 transition"
+                              title="Ignorer [Échap]"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : analyzingDocId !== currentCompany?.uuid ? (
+                  <div className="px-3 pb-3">
+                    <p className="text-xs text-purple-400 dark:text-purple-500 italic text-center py-2">Aucune suggestion pour ce document.</p>
+                    <button
+                      onClick={() => currentCompany?.texts && analyzeDoc(currentCompany.uuid, currentCompany.texts)}
+                      className="w-full text-xs font-medium text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/30 py-1.5 rounded transition text-center"
+                    >
+                      🔄 Relancer l'analyse
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             <div className="p-5 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
               <div className="flex flex-col gap-3">
@@ -997,7 +1438,15 @@ export default function WorkspaceView({
           </div>
         </div>
 
-        <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
+        {showExportModal && (
+          <ExportModal 
+            isOpen={true} 
+            onClose={() => setShowExportModal(false)}
+            entreprises={entreprises}
+            extractedEntities={extractedEntities}
+            categories={categories}
+          />
+        )}
 
         {showHotkeys && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4" onClick={() => setShowHotkeys(false)}>
@@ -1010,7 +1459,9 @@ export default function WorkspaceView({
                 {[
                   ['←', 'Source précédente'],
                   ['→', 'Source suivante'],
-                  ['Entrée', 'Associer l’entité saisie'],
+                  ['Entrée', 'Associer / Valider suggestion IA'],
+                  ['Échap', 'Ignorer suggestion IA'],
+                  ['Tab', 'Naviguer dans les suggestions IA'],
                   ['1 - 9', 'Changer de catégorie'],
                   ['?', 'Afficher / masquer cette aide'],
                 ].map(([key, desc]) => (

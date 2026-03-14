@@ -79,7 +79,7 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10);
 
-    // Détection de doublons (case-insensitive + similarité simple)
+    // Détection de doublons (insensible à la casse + similarité simple)
     const nameMap = {}; // lowercase -> [original names]
     allEntities.forEach(e => {
       // On ignore les entités marquées comme intentionnellement dupliquées
@@ -224,7 +224,7 @@ export default function StatsPanel({ entreprises, extractedEntities, categories,
             </div>
           </div>
 
-          {/* Section 4 : Doublons potentiels (Footer focus) */}
+          {/* Section 4 : Doublons potentiels (Focus pied de page) */}
           <div className="p-5 bg-slate-100/30 dark:bg-slate-900/20 border-t border-slate-200/50 dark:border-slate-700/50">
             <button
               onClick={() => setShowDuplicates(!showDuplicates)}

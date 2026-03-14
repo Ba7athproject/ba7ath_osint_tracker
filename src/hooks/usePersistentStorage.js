@@ -35,7 +35,7 @@ export function usePersistentStorage(key, initialValue) {
     return () => { isMounted.current = false; };
   }, [key]);
 
-  // Persistence side-effect
+  // Effet de bord pour la persistance
   useEffect(() => {
     if (isLoaded) {
       localforage.setItem(key, storedValue).catch(err => {

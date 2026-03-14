@@ -82,14 +82,14 @@ body {
   animation: pulseGlow 2s ease-in-out infinite;
 }
 
-/* Stagger children animations */
+/* Animations échelonnées des enfants */
 .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
 .stagger-children > *:nth-child(2) { animation-delay: 80ms; }
 .stagger-children > *:nth-child(3) { animation-delay: 160ms; }
 .stagger-children > *:nth-child(4) { animation-delay: 240ms; }
 .stagger-children > *:nth-child(5) { animation-delay: 320ms; }
 
-/* Animated gradient background */
+/* Fond dégradé animé */
 .bg-animated-gradient {
   background: linear-gradient(-45deg, #dbeafe, #e0e7ff, #fce7f3, #dbeafe, #e0e7ff);
   background-size: 400% 400%;
@@ -102,7 +102,7 @@ body {
   animation: gradientShift 12s ease infinite;
 }
 
-/* Glass effect card */
+/* Carte effet verre (Glassmorphism) */
 .glass-card {
   background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(16px);
@@ -117,7 +117,7 @@ body {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
-/* Premium button hover */
+/* Survol de bouton premium */
 .btn-premium {
   position: relative;
   overflow: hidden;
@@ -138,7 +138,7 @@ body {
   box-shadow: 0 8px 25px rgba(220, 38, 38, 0.35);
 }
 
-/* Custom scrollbar */
+/* Barre de défilement personnalisée */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -158,4 +158,193 @@ body {
 
 .dark ::-webkit-scrollbar-thumb {
   background: #475569;
+}
+
+/* === MOTEUR NER — SUGGESTIONS IA === */
+@keyframes nerPulse {
+  0%, 100% {
+    background-color: rgba(168, 85, 247, 0.15);
+    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    background-color: rgba(168, 85, 247, 0.25);
+    box-shadow: 0 0 8px 2px rgba(168, 85, 247, 0.25);
+  }
+}
+
+@keyframes nerSlideIn {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes nerProgressStripe {
+  0% { background-position: 0 0; }
+  100% { background-position: 40px 0; }
+}
+
+/* Surlignage de suggestion IA — pulsation violette */
+.ner-suggestion {
+  background-color: rgba(168, 85, 247, 0.2);
+  border-bottom: 2px solid #A855F7;
+  color: inherit;
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  animation: nerPulse 2s ease-in-out infinite;
+  transition: all 0.2s ease;
+}
+
+.ner-suggestion:hover {
+  background-color: rgba(168, 85, 247, 0.35);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+}
+
+.ner-suggestion.ner-active {
+  background-color: rgba(168, 85, 247, 0.35);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.5);
+  outline: 2px solid #A855F7;
+  outline-offset: 1px;
+}
+
+/* Surlignage d'entité validée — rouge plein */
+.ner-validated {
+  background-color: rgba(220, 38, 38, 0.15);
+  border-bottom: 2px solid #DC2626;
+  color: inherit;
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-weight: 600;
+  transition: background-color 0.3s ease;
+}
+
+.dark .ner-validated {
+  background-color: rgba(220, 38, 38, 0.25);
+}
+
+/* Lueur de focus pour la suggestion active (Point A Audit) */
+.ner-focused {
+  border: 2.5px solid #A855F7 !important;
+  box-shadow: 0 0 15px rgba(168, 85, 247, 0.6);
+  animation: nerGlow 2s infinite ease-in-out;
+  z-index: 10;
+}
+
+@keyframes nerGlow {
+  0%, 100% { box-shadow: 0 0 10px rgba(168, 85, 247, 0.4); }
+  50% { box-shadow: 0 0 20px rgba(168, 85, 247, 0.8); }
+}
+
+/* Tooltip pour les suggestions NER */
+.ner-tooltip {
+  position: absolute;
+  bottom: 110%; /* Plus d'espace au-dessus */
+  left: 0;      /* Ancrage à gauche du mot */
+  transform: translateY(5px);
+  background: #0f172a;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  white-space: normal;
+  line-height: 1.4;
+  width: max-content;
+  max-width: 300px; /* Plus étroit pour éviter le débordement à droite */
+  min-width: 180px;
+  pointer-events: none;
+  opacity: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 9999;
+  box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: break-word;
+}
+
+.ner-tooltip .verbatim {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+  display: block;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+}
+
+.ner-tooltip .reliability {
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ner-score-high { color: #22c55e; }
+.ner-score-mid { color: #eab308; }
+.ner-score-low { color: #f97316; }
+
+.ner-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 12px; /* Positionnement de la flèche près du début du mot */
+  border: 6px solid transparent;
+  border-top-color: #0f172a;
+}
+
+@keyframes tooltipAutoHide {
+  0% { opacity: 0; transform: translateY(5px); }
+  10% { opacity: 1; transform: translateY(0); }
+  90% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(5px); pointer-events: none; }
+}
+
+.ner-suggestion:hover .ner-tooltip,
+.ner-suggestion.ner-active .ner-tooltip {
+  animation: tooltipAutoHide 1.2s ease-in-out forwards;
+}
+
+/* Carte de suggestion NER dans la barre latérale */
+.ner-suggestion-card {
+  animation: nerSlideIn 0.3s ease-out both;
+  transition: all 0.2s ease;
+}
+
+.ner-suggestion-card:hover {
+  transform: translateX(-2px);
+}
+
+.ner-suggestion-card.ner-card-active {
+  border-color: #A855F7;
+  box-shadow: 0 0 0 1px #A855F7, 0 4px 12px rgba(168, 85, 247, 0.2);
+}
+
+/* Barre de progression du modèle NER */
+.ner-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(168, 85, 247, 0.15);
+  overflow: hidden;
+}
+
+.ner-progress-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #A855F7, #7C3AED);
+  transition: width 0.3s ease;
+  background-size: 40px 4px;
+  background-image: linear-gradient(
+    45deg,
+    rgba(255,255,255,0.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255,255,255,0.15) 50%,
+    rgba(255,255,255,0.15) 75%,
+    transparent 75%,
+    transparent
+  );
+  animation: nerProgressStripe 0.8s linear infinite;
 }

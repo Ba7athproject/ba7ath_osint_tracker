@@ -8,7 +8,18 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  // Force ES format for workers to support code-splitting and modern features
+  worker: {
+    format: 'es',
+  },
+  // Allow Vite to optimize ONNX & Transformers dependencies for better bundling
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'es2022'
+    }
+  },
   build: {
+    target: 'es2022',
     rollupOptions: {
       output: {
         manualChunks: {
