@@ -6,6 +6,27 @@
 </p>
 
 ---
+<p align="center">
+  <img src="./graph.svg" alt="Architecture de Ba7ath Tracker" width="100%">
+</p>
+## 🏗️ Architecture et Flux de Données (Ba7ath Tracker v1.7.0)
+
+L'application suit une architecture modulaire stricte, séparant l'interface utilisateur (UI), la gestion d'état (Hooks), et la logique métier d'investigation (Services).
+
+**1. Le Chef d'Orchestre (Point d'entrée)**
+* `App.jsx` : Supervise le routage et distribue les vues principales de l'application (`ConfigureView`, `UploadView`, `WorkspaceView`) ainsi que la persistance globale (`usePersistentStorage`).
+
+**2. Le Cœur de l'Interface (Le Hub)**
+* `WorkspaceView.jsx` : C'est le centre de commandement de l'investigateur. Il délègue l'affichage détaillé à ses sous-composants dédiés (`ExportModal`, `IgnoreListModal`, `StatsPanel`) pour garder un code lisible et maintenable.
+
+**3. Le Moteur Logique (Le Pont)**
+* `useNerEngine.js` : C'est le Hook stratégique. Il fait le pont entre l'interface visuelle (`WorkspaceView`) et la machinerie lourde de l'IA. C'est ici que l'état de l'analyse est conservé.
+
+**4. La Couche d'Intelligence et de Souveraineté (Services)**
+L'extraction de données repose sur trois piliers isolés :
+* `nerEngine.js` : Le middleware qui orchestre le modèle d'Intelligence Artificielle local.
+* `ignoreList.js` : Le service gérant la Liste Rouge (filtrage du bruit documentaire).
+* `shadowMemory.js` : Le service de forçage heuristique (Human-in-the-loop), appelé à la fois par le hook (pour apprendre des actions de l'utilisateur) et par le moteur NER (pour intercepter et écraser les prédictions de l'IA lors des analyses).
 
 ## ✨ Fonctionnalités
 
