@@ -836,7 +836,8 @@ export default function WorkspaceView({
               const regParts = beforeText.split(combinedRegex);
               regParts.forEach((part, ri) => {
                 if (!part) return;
-                if (testRegex.test(part) || part.match(combinedRegex)) {
+                const isMatch = testRegex.test(part) || part.match(combinedRegex);
+                if (isMatch && !ignoreList.has(part.trim().toLowerCase())) {
                   fragments.push(
                     <span key={`r-${pos}-${ri}`} className="bg-red-100 text-red-900 border-b-2 border-red-300 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800 font-bold px-1 rounded-sm mx-px transition-colors hover:bg-red-200 dark:hover:bg-red-800/50" title="Entité potentielle détectée">{part}</span>
                   );
@@ -895,7 +896,8 @@ export default function WorkspaceView({
             const regParts = afterText.split(combinedRegex);
             regParts.forEach((part, ri) => {
               if (!part) return;
-              if (testRegex.test(part) || part.match(combinedRegex)) {
+              const isMatch = testRegex.test(part) || part.match(combinedRegex);
+              if (isMatch && !ignoreList.has(part.trim().toLowerCase())) {
                 fragments.push(
                   <span key={`r-end-${ri}`} className="bg-red-100 text-red-900 border-b-2 border-red-300 dark:bg-red-900/30 dark:text-red-200 dark:border-red-800 font-bold px-1 rounded-sm mx-px transition-colors hover:bg-red-200 dark:hover:bg-red-800/50" title="Entité potentielle détectée">{part}</span>
                 );

@@ -137,12 +137,11 @@ export function useNerEngine(categories = []) {
         }
       });
 
-      // Filtrage des suggestions déjà ignorées ou bannies via la Ignore List
       const dismissed = dismissedRef.current[docUuid] || new Set();
-      const filtered = results.filter(r => 
-        !dismissed.has(r.word.toLowerCase()) && 
-        !ignoreList.has(r.word.toLowerCase())
-      );
+      const filtered = results.filter(r => {
+        const lowerWord = r.word.trim().toLowerCase();
+        return !dismissed.has(lowerWord) && !ignoreList.has(lowerWord);
+      });
 
       setSuggestions(prev => ({
         ...prev,
@@ -159,7 +158,7 @@ export function useNerEngine(categories = []) {
       setAnalyzingDocId(null);
       return [];
     }
-  }, [categories]);
+  }, [categories, ignoreList]);
 
   /**
    * Récupération des suggestions pour un document spécifique.
