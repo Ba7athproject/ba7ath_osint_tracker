@@ -6,6 +6,51 @@
 </p>
 
 ---
+## ✨ Fonctionnalités
+
+### 📥 Importation Multi-formats
+- **CSV** via PapaParse et **Excel (.xlsx)** via SheetJS — lecture 100% côté client.
+- Auto-détection intelligente des colonnes (ID, Titre, Texte).
+
+### ⚙️ Configuration Avancée
+- **Catégories 100% personnalisables** : définissez vos propres types d'entités avec couleurs et icônes.
+- **Support de multiples colonnes de texte** : affichage simultané de plusieurs paragraphes sources.
+- **Métadonnées dynamiques** : affichage sélectif du contexte (ID, uuid, colonnes CSV).
+- **Règles de détection visuelle** : surlignage automatique des majuscules, acronymes et structures juridiques (support latin + cyrillique).
+
+### 🏷️ Extraction & OSINT
+- **Moteur Regex Optimisé** : Détection mémorisée des entités potentielles pour une fluidité maximale.
+- **IA NER Locale (DistilBERT)** : Extraction automatique des Personnes, Organisations et Lieux sans quitter le navigateur via [Transformers.js](https://github.com/xenova/transformers.js).
+- **🧠 Shadow Memory (Human-in-the-Loop)** : L'IA apprend de vos corrections pour les analyses futures (v1.7).
+- **🚫 Liste Rouge (Entity Ignore List)** : Bannissement instantané des entités parasites (v1.7).
+- **Saisie Sécurisée & Nettoyage** : Suppression automatique des caractères invisibles et **Alt-codes Windows** lors de la sélection (v1.3).
+- **Audit de Qualité & Fusion** : Détection de variantes via l'algorithme de **Levenshtein** avec résolution de conflits (v1.6).
+- **Métadonnées Dynamiques** : Affichage personnalisable du contexte source (Colonnes CSV/Excel) directement dans le Workspace (v1.3).
+
+### 💾 Persistance & Robustesse
+- **Stockage IndexedDB** : Capacité illimitée pour sessions massives via `localforage`.
+- **🛡️ RAM Shield (V8 Stability)** : Allocation préventive de la mémoire pour éviter les crashs navigateurs (v1.6).
+- **Interface 60 FPS** : Virtualisation intelligente et isolation de l'IA pour une fluidité totale.
+- **Auto-Hide Tooltips** : Masquage automatique des bulles IA après 1.2s (v1.6).
+- **Restauration auto** : Reprise immédiate après fermeture de l'onglet ou crash navigateur.
+
+### 📊 Tableau de Bord
+- Couverture de la tâche en temps réel (Donut Chart).
+- Top 10 des cibles les plus fréquentes.
+- Distribution par catégorie d'entité et suivi du volume de la Shadow Memory.
+
+### 📤 Exportation & Collaboration
+- **Multi-format** : CSV (plat/groupé), JSON NER (format d'entraînement), et Graphes de réseau (Gephi, Neo4J, Kumu).
+- **Session Portable** : Export complet de l'état de travail (données + entités + shadow memory) pour partage immédiat avec un collègue.
+
+### ⌨️ Raccourcis Clavier
+| `←` / `→` | Navigation entre sources |
+| `Entrée` | Validation de l'entité ou de la suggestion IA |
+| `Suppr` | Bannir l'entité (Ajout à la Liste Rouge) |
+| `Alt + 1-9` | Changement de catégorie (Requis si le focus est dans le champ nom v1.3) |
+| `?` | Aide interactive |
+
+---
 <p align="center">
   <img src="./graph.svg" alt="Architecture de Ba7ath Tracker" width="100%">
 </p>
@@ -24,51 +69,9 @@ L'application suit une architecture modulaire stricte, séparant l'interface uti
 
 **4. La Couche d'Intelligence et de Souveraineté (Services)**
 L'extraction de données repose sur trois piliers isolés :
-* `nerEngine.js` : Le middleware qui orchestre le modèle d'Intelligence Artificielle local.
+* `nerEngine.js` : Le middleware qui orchestre le modèle d'Intelligence Artificielle local. L'IA est isolée dans un **thread séparé (Web Worker)** pour garantir une interface fluide à 60 FPS.
 * `ignoreList.js` : Le service gérant la Liste Rouge (filtrage du bruit documentaire).
 * `shadowMemory.js` : Le service de forçage heuristique (Human-in-the-loop), appelé à la fois par le hook (pour apprendre des actions de l'utilisateur) et par le moteur NER (pour intercepter et écraser les prédictions de l'IA lors des analyses).
-
-## ✨ Fonctionnalités
-
-### 📥 Importation Multi-formats
-- **CSV** via PapaParse et **Excel (.xlsx)** via SheetJS — lecture 100% côté client.
-- Auto-détection intelligente des colonnes (ID, Titre, Texte).
-
-### ⚙️ Configuration Avancée
-- **Catégories 100% personnalisables** : définissez vos propres types d'entités avec couleurs et icônes.
-- **Support de multiples colonnes de texte** : affichage simultané de plusieurs paragraphes sources.
-- **Métadonnées dynamiques** : affichage sélectif du contexte (ID, uuid, colonnes CSV).
-- **Règles de détection visuelle** : surlignage automatique des majuscules, acronymes et structures juridiques (support latin + cyrillique).
-
-### 🏷️ Extraction & OSINT
-- **Moteur Regex Optmisé** : détection mémorisée des entités potentielles pour une fluidité maximale.
-- **Saisie assistée** : suggestions en temps réel des entités déjà extraites pour éviter les doublons.
-- **Nettoyage automatique** : suppression des caractères invisibles et ponctuations parasites lors de la sélection.
-- **Audit de Qualité** : détection automatique des variantes (ex: "TOTAL" vs "Total") avec **fusion intelligente en un clic**.
-
-### 💾 Persistance & Robustesse
-- **Stockage IndexedDB** : utilisation de `localforage` pour gérer des sessions massives sans limite de taille.
-- **Restauration auto** : reprise immédiate après fermeture de l'onglet ou crash navigateur.
-- **Virtualisation intelligente** : découpage des longs textes en blocs gérables pour préserver les performances.
-
-### 📊 Tableau de Bord
-- Couverture de la tâche en temps réel (Donut Chart).
-- Top 10 des cibles les plus fréquentes.
-- Distribution par catégorie d'entité.
-
-### 📤 Exportation & Collaboration
-- **Multi-format** : CSV (plat/groupé), JSON NER (format d'entraînement), et Graphes de réseau (Gephi, Neo4J).
-- **Session Portable** : export complet de l'état de travail pour partage immédiat avec un collègue.
-
-### ⌨️ Raccourcis Clavier
-| Touche | Action |
-|--------|--------|
-| `←` / `→` | Navigation entre sources |
-| `Entrée` | Validation de l'entité |
-| `1` - `9` | Changement de catégorie (utilisez **Alt + Chiffre** si le focus est dans le champ nom) |
-| `?` | Aide interactive |
-
----
 
 ## 🛠️ Prérequis
 
@@ -99,32 +102,31 @@ Ouvrez votre navigateur à l'URL locale (par défaut : `http://localhost:5173/`)
 4. **Review** — Consultez le tableau de bord pour suivre la progression, repérer les doublons, et identifier les entités les plus fréquentes.
 5. **Export** — Exportez vos résultats (CSV plat, groupé, JSON NER, ou réseau), ou sauvegardez votre session complète pour la partager.
 
-## 🏗️ Architecture
-
-```
-ba7ath-tagger/
-├── src/
-│   ├── hooks/
-│   │   └── usePersistentStorage.js  # Moteur IndexedDB (localforage)
-│   ├── components/
-│   │   ├── WorkspaceView.jsx   # Logique virtuelle & Regex OSINT
-│   │   ├── StatsPanel.jsx      # Audit & Fusion de données
-│   │   └── ...
-│   └── index.css               # Design System v4 & Dark Mode
-└── ...
-```
-
 ## 🧰 Technologies
 
 | Technologie | Usage |
 |---|---|
 | **React + Vite** | Frontend rapide et modulaire |
 | **Tailwind CSS v4** | Classes utilitaires, mode sombre natif |
+| **Transformers.js** | Inférence IA (NER) locale |
 | **localforage** | Stockage IndexedDB asynchrone |
 | **PapaParse** | Lecture CSV côté client |
 | **SheetJS (xlsx)** | Lecture Excel côté client |
 | **Lucide React** | Icônes vectorielles légères |
 | **Tauri** | Packaging desktop (optionnel) |
+
+### 📦 Dépendances Clés
+- **React 19** / **Vite 7**
+- **Tailwind CSS v4**
+- **Transformers.js (Xenova)**
+- **localforage** (IndexedDB)
+- **PapaParse** (CSV) & **SheetJS** (Excel)
+
+## 🔒 Confidentialité & Souveraineté
+
+- **Pas de Cloud** : Aucune donnée n'est envoyée à un serveur externe. Le traitement est 100% local.
+- **Inférence Locale** : Le modèle IA est téléchargé une seule fois, puis s'exécute sur votre propre matériel (VRAM/RAM).
+- **Code Open Source** : Transparence totale pour les audits de sécurité et la vérification de l'intégrité des données.
 
 ## 🤝 Contribution
 
