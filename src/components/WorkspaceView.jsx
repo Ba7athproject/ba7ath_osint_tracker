@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X, Settings, Brain, Sparkles, Loader2, Check, XCircle } from 'lucide-react';
+import { Save, ChevronRight, ChevronLeft, Building2, ShieldAlert, User, CheckCircle2, Target, Trash2, Search, Moon, Sun, Tag, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText, Download, BarChart3, Keyboard, FolderDown, X, Settings, Brain, Sparkles, Loader2, Check, XCircle, EyeOff } from 'lucide-react';
 
 import ExportModal from './ExportModal';
 import StatsPanel from './StatsPanel';
+import IgnoreListModal from './IgnoreListModal';
 import { useNerEngine } from '../hooks/useNerEngine';
 
 // Constantes stables pour éviter les boucles de rendu infinies (Maximum update depth exceeded)
@@ -117,10 +118,20 @@ export default function WorkspaceView({
     initModel, analyzeDoc, getDocSuggestions,
     validateSuggestion, dismissSuggestion, dismissAll,
     MapsSuggestions, activeSuggestionIndex, setActiveSuggestionIndex,
-    analyzingDocId, analysisProgress, suggestions, clearAllSuggestions
+    analyzingDocId, analysisProgress, suggestions, clearAllSuggestions,
+    learnCorrectionsBatch,
+    forgetCorrection,
+    clearShadowMemory,
+    shadowMemorySize,
+    ignoreList,
+    banEntity,
+    unbanEntity,
+    unbanAll,
+    importIgnoreList,
   } = useNerEngine(categories);
 
   const [nerEnabled, setNerEnabled] = useState(false);
+  const [showIgnoreListModal, setShowIgnoreListModal] = useState(false);
   const currentCompany = entreprises[currentIndex];
 
   // Récupération des suggestions NER pour le document actuel
@@ -198,6 +209,20 @@ export default function WorkspaceView({
   const [pendingConflict, setPendingConflict] = useState(null);
 
   const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // === SHADOW MEMORY BATCH COMMIT ===
+  const commitShadowMemoryBatch = useCallback(() => {
+    if (!currentCompany || !extractedEntities[currentCompany.uuid]) return;
+    const finalEntities = extractedEntities[currentCompany.uuid];
+    const entries = finalEntities.map(e => ({
+      entityRaw: e.name,
+      forcedCategory: e.type
+    }));
+    
+    if (entries.length > 0 && learnCorrectionsBatch) {
+      learnCorrectionsBatch(entries);
+    }
+  }, [currentCompany, extractedEntities, learnCorrectionsBatch]);
   const entityInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
 
@@ -405,6 +430,14 @@ export default function WorkspaceView({
     if (!pendingConflict || !currentCompany) return;
 
     const { newName, existingEntity, type, note, scope, suggestionIndex } = pendingConflict;
+    
+    // Si la source est une suggestion IA, on la consomme du hook D'ABORD, 
+    // pour avoir l'objet entity exact (incluant isAiSuggestion) et l'enlever de la liste
+    let aiEntity = null;
+    let isAiSource = suggestionIndex !== null && suggestionIndex !== undefined;
+    if (isAiSource) {
+      aiEntity = validateSuggestion(currentCompany.uuid, suggestionIndex);
+    }
 
     setExtractedEntities((prev) => {
       const existingInDoc = [...(prev[currentCompany.uuid] || [])];
@@ -413,17 +446,21 @@ export default function WorkspaceView({
       if (resolution === 'merge-keep-old') {
         const alreadyInDoc = existingInDoc.some(e => normalizeEntityName(e.name) === normOld);
         if (!alreadyInDoc) {
+          // Keep old means we add the exact same entity that was conflicted with (if it came from another doc)
           existingInDoc.push({ ...existingEntity });
         }
       } else if (resolution === 'merge-keep-new') {
         const idx = existingInDoc.findIndex(e => normalizeEntityName(e.name) === normOld);
+        const entityToInsert = isAiSource && aiEntity ? { ...aiEntity, name: newName, type, note } : { name: newName, type, note };
+        
         if (idx !== -1) {
-          existingInDoc[idx] = { ...existingInDoc[idx], name: newName, type, note };
+          existingInDoc[idx] = entityToInsert;
         } else {
-          existingInDoc.push({ name: newName, type, note });
+          existingInDoc.push(entityToInsert);
         }
       } else if (resolution === 'keep-both') {
-        existingInDoc.push({ name: newName, type, note, isDuplicateIntentional: true });
+        const entityToInsert = isAiSource && aiEntity ? { ...aiEntity, name: newName, type, note, isDuplicateIntentional: true } : { name: newName, type, note, isDuplicateIntentional: true };
+        existingInDoc.push(entityToInsert);
       }
 
       return {
@@ -431,11 +468,6 @@ export default function WorkspaceView({
         [currentCompany.uuid]: existingInDoc
       };
     });
-
-    // Finalize NER if it was a suggestion
-    if (suggestionIndex !== null && suggestionIndex !== undefined) {
-      validateSuggestion(currentCompany.uuid, suggestionIndex);
-    }
 
     setPendingConflict(null);
     setCurrentEntityName('');
@@ -452,6 +484,7 @@ export default function WorkspaceView({
   const currentCompanyIdRef = useRef(currentCompany?.uuid);
   const handleValidateNerRef = useRef(null);
   const handleDismissNerRef = useRef(null);
+  const handleBanNerRef = useRef(null);
   const handleMapsSuggestionsRef = useRef(null);
   const nerSuggestionsRef = useRef(currentNerSuggestions);
   const activeSuggestionIndexRef = useRef(activeSuggestionIndex);
@@ -555,6 +588,16 @@ export default function WorkspaceView({
           e.preventDefault();
           e.stopImmediatePropagation();
           handleDismissNerRef.current(activeSuggestionIndexRef.current);
+          return;
+        }
+      }
+
+      // NER : Touche Suppr (Delete ou Backspace sous certaines confs) pour BANNIR la suggestion focalisée
+      if (e.key === 'Delete') {
+        if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          handleBanNerRef.current(activeSuggestionIndexRef.current);
           return;
         }
       }
@@ -693,9 +736,19 @@ export default function WorkspaceView({
     dismissSuggestion(currentCompany.uuid, index);
   }, [currentCompany, dismissSuggestion]);
 
+  const handleBanNerSuggestion = useCallback((index) => {
+    if (!currentCompany) return;
+    const suggestions = currentNerSuggestions;
+    if (index >= 0 && index < suggestions.length) {
+      const suggestion = suggestions[index];
+      banEntity(suggestion.word);
+    }
+  }, [currentCompany, currentNerSuggestions, banEntity]);
+
   // Synchronisation des références des gestionnaires NER après leurs déclarations
   useEffect(() => { handleValidateNerRef.current = handleValidateNerSuggestion; }, [handleValidateNerSuggestion]);
   useEffect(() => { handleDismissNerRef.current = handleDismissNerSuggestion; }, [handleDismissNerSuggestion]);
+  useEffect(() => { handleBanNerRef.current = handleBanNerSuggestion; }, [handleBanNerSuggestion]);
 
   const renderHighlightedText = useCallback(
     (text) => {
@@ -867,7 +920,10 @@ export default function WorkspaceView({
       return parts.map((part, index) => {
         if (!part) return null;
 
-        if (testRegex.test(part) || part.match(combinedRegex)) {
+        const isMatch = testRegex.test(part) || part.match(combinedRegex);
+        
+        // Si ça matche le regex, on vérifie si le mot n'est pas dans la liste rouge
+        if (isMatch && !ignoreList.has(part.toLowerCase())) {
           return (
             <span
               key={index}
@@ -881,7 +937,7 @@ export default function WorkspaceView({
         return <span key={index}>{part}</span>;
       });
     },
-    [highlightRegexInfo, nerEnabled, currentNerSuggestions, validatedEntityNames, activeSuggestionIndex, extractedEntities, currentCompany]
+    [highlightRegexInfo, nerEnabled, currentNerSuggestions, validatedEntityNames, activeSuggestionIndex, extractedEntities, currentCompany, ignoreList]
   );
 
   const handleTextSelection = () => {
@@ -926,10 +982,11 @@ export default function WorkspaceView({
   const handleMarkNoTarget = () => {
     if (!currentCompany) return;
     setExtractedEntities((prev) => ({ ...prev, [currentCompany.uuid]: [] }));
-    handleNext();
+    handleNext(true); // skip learning
   };
 
-  const handleNext = () => {
+  const handleNext = (skipCommit) => {
+    if (skipCommit !== true) commitShadowMemoryBatch();
     if (currentIndex < entreprises.length - 1) {
       setCurrentIndex((prev) => prev + 1);
       setCurrentEntityName('');
@@ -938,6 +995,7 @@ export default function WorkspaceView({
   };
 
   const handlePrev = () => {
+    commitShadowMemoryBatch();
     if (currentIndex > 0) {
       setCurrentIndex((prev) => prev - 1);
       setCurrentEntityName('');
@@ -977,7 +1035,7 @@ export default function WorkspaceView({
               <div>
                 <h1 className="text-xl font-black flex items-center gap-2 tracking-tight leading-none uppercase">
                   BA7ATH <span className="text-red-600">OSINT</span> TRACKER
-                  <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-red-600 text-white rounded font-black normal-case tracking-normal">v1.6</span>
+                  <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-red-600 text-white rounded font-black normal-case tracking-normal">v1.7</span>
                 </h1>
                 <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.2em] mt-1">
                   Intelligence Artificielle Souveraine
@@ -1011,6 +1069,7 @@ export default function WorkspaceView({
                     key={result.uuid}
                     className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition border-b last:border-0 border-slate-100 dark:border-slate-700 flex items-center"
                     onClick={() => {
+                      commitShadowMemoryBatch();
                       const idx = entreprises.findIndex((e) => e.uuid === result.uuid);
                       if (idx !== -1) setCurrentIndex(idx);
                       setSearchQuery('');
@@ -1114,6 +1173,18 @@ export default function WorkspaceView({
               className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-sm font-medium transition shadow-sm"
             >
               <FolderDown className="w-4 h-4" /> <span className="hidden sm:inline">Session</span>
+            </button>
+            <button
+              onClick={() => setShowIgnoreListModal(true)}
+              className="p-2 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition relative group"
+              title="Gérer la Liste Rouge"
+            >
+              <EyeOff className="w-5 h-5 group-hover:text-red-500 transition-colors" />
+              {ignoreList.size > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border border-white dark:border-slate-900"></span>
+                </span>
+              )}
             </button>
             <button
               onClick={() => setShowExportModal(true)}
@@ -1295,11 +1366,11 @@ export default function WorkspaceView({
                               <Check className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleDismissNerSuggestion(idx); }}
-                              className="p-1 rounded bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 transition"
-                              title="Ignorer [Échap]"
+                              onClick={(e) => { e.stopPropagation(); handleBanNerSuggestion(idx); }}
+                              className="p-1 rounded bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition"
+                              title="Bannir (Liste Rouge) [Suppr]"
                             >
-                              <XCircle className="w-3.5 h-3.5" />
+                              <EyeOff className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
@@ -1365,6 +1436,18 @@ export default function WorkspaceView({
                     ))}
                   </select>
                   <button onClick={handleAddEntity} className="bg-slate-800 text-white px-6 py-2 rounded-md font-bold hover:bg-slate-900 transition">Associer [Entrée]</button>
+                  <button 
+                    onClick={() => {
+                      if (currentEntityName.trim()) {
+                        banEntity(currentEntityName);
+                        setCurrentEntityName('');
+                      }
+                    }} 
+                    className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-md font-bold hover:bg-slate-300 dark:hover:bg-slate-600 transition flex items-center gap-1"
+                    title="Ajouter à la Liste Rouge"
+                  >
+                    <EyeOff className="w-4 h-4" /> Bannir
+                  </button>
                 </div>
               </div>
 
@@ -1447,6 +1530,15 @@ export default function WorkspaceView({
             categories={categories}
           />
         )}
+
+        <IgnoreListModal 
+          isOpen={showIgnoreListModal}
+          onClose={() => setShowIgnoreListModal(false)}
+          ignoreList={ignoreList}
+          onUnban={unbanEntity}
+          onUnbanAll={unbanAll}
+          onImport={importIgnoreList}
+        />
 
         {showHotkeys && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4" onClick={() => setShowHotkeys(false)}>

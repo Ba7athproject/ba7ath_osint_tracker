@@ -38,7 +38,7 @@ export default function ManualTagger() {
     const mapping = session.columnMapping;
     // Condition de migration : présence de 'text' (ancien) et absence de 'textColumns' valide (nouveau)
     if (mapping.text && (!mapping.textColumns || mapping.textColumns.length === 0)) {
-      console.log("Migration du format de mapping (v1.3 -> v1.6.0) en cours...");
+      console.log("Migration du format de mapping (v1.3 -> v1.7.0) en cours...");
       setSession(prev => {
         const newMapping = {
           id: prev.columnMapping.id || '',
@@ -129,7 +129,7 @@ export default function ManualTagger() {
         </div>
         <div className="text-center">
           <h1 className="text-white text-2xl font-black tracking-tighter mb-1">BA7ATH <span className="text-red-500">OSINT</span> TRACKER</h1>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-[0.2em]">v1.6.0 — Initialisation...</p>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-[0.2em]">v1.7.0 — Initialisation...</p>
         </div>
       </div>
     );

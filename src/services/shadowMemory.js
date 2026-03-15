@@ -1,0 +1,440 @@
+/**
+ * ============================================================================
+ * shadowMemory.js — Module de Mémoire Fantôme (Shadow Memory)
+ * Ba7ath OSINT Tracker v1.7 — Human-in-the-Loop NER Learning System
+ * ============================================================================
+ *
+ * Ce module est le cœur du système d'apprentissage par correction humaine.
+ * Il permet à l'investigateur de "dresser" l'IA en sauvegardant ses corrections
+ * de catégorisation dans un dictionnaire persistant (IndexedDB via localforage).
+ *
+ * Lors des analyses NER suivantes, chaque entité détectée par DistilBERT est
+ * croisée avec ce dictionnaire. Si une correspondance est trouvée (exacte ou
+ * fuzzy via Levenshtein), la classification de l'IA est écrasée par celle de
+ * l'utilisateur, avec un score de confiance forcé à 100%.
+ *
+ * ARCHITECTURE :
+ *   nerWorker.js (inférence brute) → nerEngine.js (applyShadowMemory) → useNerEngine.js (UI)
+ *
+ * RÈGLE DE PROPORTIONNALITÉ (Feedback investigateur) :
+ *   - Entités ≤ 4 caractères (acronymes : GCT, GAT, IDF...) → correspondance EXACTE uniquement
+ *   - Entités ≥ 5 caractères (noms longs : "Elbit Systems") → fuzzy matching (Levenshtein ≤ 2)
+ *   Cela évite les faux positifs sur les acronymes courts très fréquents en OSINT.
+ * ============================================================================
+ */
+
+import localforage from 'localforage';
+
+// ============================================================================
+// CONSTANTES
+// ============================================================================
+
+/** Clé IndexedDB pour le dictionnaire d'apprentissage */
+const SHADOW_MEMORY_KEY = 'ba7ath_shadow_memory';
+
+/**
+ * Seuil maximum de distance Levenshtein pour le fuzzy matching.
+ * Appliqué UNIQUEMENT aux entités de 5 caractères ou plus.
+ */
+const LEVENSHTEIN_THRESHOLD = 2;
+
+/**
+ * Longueur minimale d'entité pour autoriser le fuzzy matching.
+ * En dessous de cette longueur, seule la correspondance exacte est acceptée.
+ * Protège les acronymes courts (ex: GCT ≠ GAT) contre les faux positifs.
+ */
+const MIN_LENGTH_FOR_FUZZY = 5;
+
+// ============================================================================
+// UTILITAIRE : DISTANCE DE LEVENSHTEIN
+// ============================================================================
+
+/**
+ * Calcule la distance de Levenshtein entre deux chaînes de caractères.
+ *
+ * La distance de Levenshtein mesure le nombre minimum d'opérations
+ * d'édition (insertion, suppression, substitution) nécessaires pour
+ * transformer une chaîne en une autre.
+ *
+ * Implémentation par programmation dynamique (matrice complète).
+ * Complexité : O(n*m) en temps et en espace, où n et m sont les
+ * longueurs respectives des deux chaînes.
+ *
+ * @param {string} a - Première chaîne (entité détectée par l'IA)
+ * @param {string} b - Seconde chaîne (entité dans le dictionnaire)
+ * @returns {number} Distance d'édition minimale entre les deux chaînes
+ *
+ * @example
+ *   levenshteinDistance("Elbit Systems", "Elbit System")  // → 1
+ *   levenshteinDistance("GCT", "GAT")                      // → 1
+ *   levenshteinDistance("hello", "hello")                   // → 0
+ */
+export function levenshteinDistance(a, b) {
+  // Cas dégénérés : si l'une des chaînes est vide,
+  // la distance est la longueur de l'autre
+  if (!a || a.length === 0) return b ? b.length : 0;
+  if (!b || b.length === 0) return a.length;
+
+  const lenA = a.length;
+  const lenB = b.length;
+
+  // Création de la matrice (lenA+1) x (lenB+1)
+  // matrix[i][j] = distance entre a[0..i-1] et b[0..j-1]
+  const matrix = [];
+
+  // Initialisation de la première colonne : transformer a[0..i-1] en chaîne vide
+  for (let i = 0; i <= lenA; i++) {
+    matrix[i] = [i];
+  }
+
+  // Initialisation de la première ligne : transformer chaîne vide en b[0..j-1]
+  for (let j = 0; j <= lenB; j++) {
+    matrix[0][j] = j;
+  }
+
+  // Remplissage de la matrice par programmation dynamique
+  for (let i = 1; i <= lenA; i++) {
+    for (let j = 1; j <= lenB; j++) {
+      // Coût de substitution : 0 si les caractères sont identiques, 1 sinon
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,      // Suppression (supprimer un caractère de a)
+        matrix[i][j - 1] + 1,      // Insertion (insérer un caractère dans a)
+        matrix[i - 1][j - 1] + cost // Substitution (remplacer un caractère)
+      );
+    }
+  }
+
+  // La distance finale est dans le coin inférieur droit de la matrice
+  return matrix[lenA][lenB];
+}
+
+// ============================================================================
+// GESTION DU DICTIONNAIRE D'APPRENTISSAGE (CRUD IndexedDB)
+// ============================================================================
+
+/**
+ * Charge le dictionnaire d'apprentissage depuis IndexedDB.
+ *
+ * Le dictionnaire est un tableau d'objets, chacun représentant une
+ * correction validée par l'investigateur :
+ *   { entityRaw: string, forcedCategory: string, timestamp: number }
+ *
+ * En cas d'erreur de lecture (IndexedDB corrompu, permissions, etc.),
+ * retourne un tableau vide et logge l'erreur sans crasher l'application.
+ *
+ * @returns {Promise<Array>} Le dictionnaire d'apprentissage ou un tableau vide en cas d'erreur
+ */
+export async function loadDictionary() {
+  try {
+    const dictionary = await localforage.getItem(SHADOW_MEMORY_KEY);
+    // Si aucune donnée n'existe encore, retourner un tableau vide
+    return Array.isArray(dictionary) ? dictionary : [];
+  } catch (error) {
+    console.warn(
+      '[Shadow Memory] ⚠️ Erreur de lecture du dictionnaire IndexedDB. ' +
+      'Le système d\'apprentissage fonctionne sans persistance pour cette session.',
+      error
+    );
+    return [];
+  }
+}
+
+/**
+ * Sauvegarde (ou met à jour) une correction dans le dictionnaire d'apprentissage.
+ *
+ * Si l'entité existe déjà dans le dictionnaire (correspondance exacte,
+ * insensible à la casse), sa catégorie est mise à jour au lieu de créer
+ * un doublon. Le timestamp est rafraîchi pour tracer la dernière correction.
+ *
+ * @param {string} entityRaw - Le nom brut de l'entité tel que détecté (ex: "Elbit Systems")
+ * @param {string} forcedCategory - L'ID de catégorie forcée par l'utilisateur (ex: "Entreprise")
+ * @returns {Promise<Array>} Le dictionnaire mis à jour
+ *
+ * @example
+ *   await saveCorrectionToDictionary("Elbit Systems", "Entreprise");
+ *   // Sauvegarde : { entityRaw: "Elbit Systems", forcedCategory: "Entreprise", timestamp: 1710... }
+ */
+export async function saveCorrectionToDictionary(entityRaw, forcedCategory) {
+  try {
+    const dictionary = await loadDictionary();
+    const normalizedInput = entityRaw.trim().toLowerCase();
+
+    // Recherche d'une entrée existante pour cette entité (mise à jour si trouvée)
+    const existingIndex = dictionary.findIndex(
+      entry => entry.entityRaw.trim().toLowerCase() === normalizedInput
+    );
+
+    const correctionEntry = {
+      entityRaw: entityRaw.trim(),
+      forcedCategory: forcedCategory,
+      timestamp: Date.now(),
+    };
+
+    if (existingIndex !== -1) {
+      // Mise à jour de l'entrée existante (l'investigateur a re-corrigé)
+      dictionary[existingIndex] = correctionEntry;
+      console.log(
+        `[Shadow Memory] 🔄 Mise à jour : "${entityRaw}" → ${forcedCategory}`
+      );
+    } else {
+      // Ajout d'une nouvelle entrée
+      dictionary.push(correctionEntry);
+      console.log(
+        `[Shadow Memory] 💾 Nouvelle correction : "${entityRaw}" → ${forcedCategory}`
+      );
+    }
+
+    // Persistance dans IndexedDB
+    await localforage.setItem(SHADOW_MEMORY_KEY, dictionary);
+    return dictionary;
+  } catch (error) {
+    console.error(
+      '[Shadow Memory] ❌ Erreur de sauvegarde dans IndexedDB. ' +
+      'La correction ne sera pas mémorisée pour les sessions futures.',
+      error
+    );
+    // Retourner le dictionnaire actuel (ou vide) même en cas d'erreur
+    // pour ne pas bloquer le flux utilisateur
+    return await loadDictionary();
+  }
+}
+
+/**
+ * Sauvegarde (ou met à jour) un lot de corrections en une seule écriture IndexedDB.
+ *
+ * @param {Array<{entityRaw: string, forcedCategory: string}>} entries - Les corrections à apprendre
+ * @returns {Promise<Array>} Le dictionnaire mis à jour
+ */
+export async function saveCorrectionsBatch(entries) {
+  if (!entries || entries.length === 0) return await loadDictionary();
+  
+  try {
+    const dictionary = await loadDictionary();
+    let updatedCount = 0;
+    let addedCount = 0;
+
+    for (const { entityRaw, forcedCategory } of entries) {
+      if (!entityRaw || !forcedCategory) continue;
+      
+      const normalizedInput = entityRaw.trim().toLowerCase();
+      const existingIndex = dictionary.findIndex(
+        entry => entry.entityRaw.trim().toLowerCase() === normalizedInput
+      );
+
+      const correctionEntry = {
+        entityRaw: entityRaw.trim(),
+        forcedCategory: forcedCategory,
+        timestamp: Date.now(),
+      };
+
+      if (existingIndex !== -1) {
+        dictionary[existingIndex] = correctionEntry;
+        updatedCount++;
+      } else {
+        dictionary.push(correctionEntry);
+        addedCount++;
+      }
+    }
+
+    if (updatedCount > 0 || addedCount > 0) {
+      await localforage.setItem(SHADOW_MEMORY_KEY, dictionary);
+      console.log(`[Shadow Memory] 💾 Batch save : ${addedCount} ajouts, ${updatedCount} mises à jour.`);
+    }
+    
+    return dictionary;
+  } catch (error) {
+    console.error('[Shadow Memory] ❌ Erreur de sauvegarde batch dans IndexedDB.', error);
+    return await loadDictionary();
+  }
+}
+
+/**
+ * Supprime une correction spécifique du dictionnaire d'apprentissage.
+ *
+ * Utile si l'investigateur réalise qu'une correction précédente était erronée
+ * et veut "désapprendre" une association forcée.
+ *
+ * @param {string} entityRaw - Le nom brut de l'entité à oublier
+ * @returns {Promise<Array>} Le dictionnaire mis à jour après suppression
+ */
+export async function removeCorrectionFromDictionary(entityRaw) {
+  try {
+    const dictionary = await loadDictionary();
+    const normalizedInput = entityRaw.trim().toLowerCase();
+
+    // Filtrage : on garde tout sauf l'entrée ciblée
+    const filteredDictionary = dictionary.filter(
+      entry => entry.entityRaw.trim().toLowerCase() !== normalizedInput
+    );
+
+    if (filteredDictionary.length < dictionary.length) {
+      console.log(`[Shadow Memory] 🗑️ Correction oubliée : "${entityRaw}"`);
+    } else {
+      console.log(`[Shadow Memory] ℹ️ Aucune correction trouvée pour : "${entityRaw}"`);
+    }
+
+    await localforage.setItem(SHADOW_MEMORY_KEY, filteredDictionary);
+    return filteredDictionary;
+  } catch (error) {
+    console.error(
+      '[Shadow Memory] ❌ Erreur de suppression dans IndexedDB.',
+      error
+    );
+    return await loadDictionary();
+  }
+}
+
+/**
+ * Purge complète du dictionnaire d'apprentissage.
+ *
+ * Réinitialise la mémoire fantôme — l'IA revient à ses classifications
+ * de base sans aucune surcharge humaine. Usage : réinitialisation de projet
+ * ou changement de contexte d'investigation.
+ *
+ * @returns {Promise<void>}
+ */
+export async function clearDictionary() {
+  try {
+    await localforage.removeItem(SHADOW_MEMORY_KEY);
+    console.log('[Shadow Memory] 🧹 Dictionnaire d\'apprentissage purgé.');
+  } catch (error) {
+    console.error(
+      '[Shadow Memory] ❌ Erreur de purge du dictionnaire IndexedDB.',
+      error
+    );
+  }
+}
+
+// ============================================================================
+// INTERCEPTEUR NER — MIDDLEWARE DE REMPLACEMENT HEURISTIQUE
+// ============================================================================
+
+/**
+ * Applique la mémoire fantôme (Shadow Memory) sur les résultats bruts du NER.
+ *
+ * C'est la fonction "middleware" qui s'intercale entre la sortie du worker
+ * DistilBERT et la consommation par le hook React. Pour chaque entité
+ * détectée par l'IA, elle :
+ *
+ *   1. Vérifie si une correspondance EXACTE existe dans le dictionnaire
+ *   2. Si non, et si l'entité fait ≥ 5 caractères, cherche une correspondance
+ *      FUZZY (distance de Levenshtein ≤ 2)
+ *   3. Si une correspondance est trouvée, ÉCRASE la catégorie de l'IA par
+ *      celle de l'utilisateur et force le score de confiance à 100%
+ *
+ * RÈGLE DE PROPORTIONNALITÉ (protection des acronymes) :
+ *   - Entités ≤ 4 chars → correspondance EXACTE uniquement (distance = 0)
+ *   - Entités ≥ 5 chars → fuzzy matching autorisé (distance ≤ 2)
+ *
+ * @param {Array} entities - Tableau d'entités NER brutes du worker
+ *   Chaque entité : { word, entity_group, score, suggestedCategory, description, ... }
+ * @returns {Promise<Array>} Les entités modifiées avec les corrections de la mémoire fantôme
+ *
+ * @example
+ *   // Si le dictionnaire contient { entityRaw: "Elbit Systems", forcedCategory: "Entreprise" }
+ *   // et que l'IA détecte "Elbit System" (sans 's') en tant que "ORG" à 78%,
+ *   // le résultat sera : { ..., suggestedCategory: "Entreprise", score: 100, shadowMemoryMatch: true }
+ */
+export async function applyShadowMemory(entities) {
+  // Si pas d'entités, rien à faire — court-circuit rapide
+  if (!entities || entities.length === 0) return entities;
+
+  try {
+    const dictionary = await loadDictionary();
+
+    // Si le dictionnaire est vide, aucune correction à appliquer
+    if (dictionary.length === 0) return entities;
+
+    // Pré-calcul : normaliser toutes les entrées du dictionnaire pour la recherche
+    const normalizedDictionary = dictionary.map(entry => ({
+      ...entry,
+      normalizedRaw: entry.entityRaw.trim().toLowerCase(),
+    }));
+
+    // Itération sur chaque entité détectée par l'IA
+    return entities.map(entity => {
+      const entityWordLower = entity.word.trim().toLowerCase();
+      const entityLength = entityWordLower.length;
+
+      // --- PHASE 1 : Recherche de correspondance EXACTE (insensible à la casse) ---
+      // Prioritaire car elle est O(n) et sans ambiguïté
+      const exactMatch = normalizedDictionary.find(
+        entry => entry.normalizedRaw === entityWordLower
+      );
+
+      if (exactMatch) {
+        console.log(
+          `[Shadow Memory] ✅ Match EXACT : "${entity.word}" → ` +
+          `catégorie forcée "${exactMatch.forcedCategory}" ` +
+          `(IA avait proposé "${entity.suggestedCategory}" à ${entity.score}%)`
+        );
+        return {
+          ...entity,
+          suggestedCategory: exactMatch.forcedCategory,
+          score: 100,
+          shadowMemoryMatch: true,       // Flag pour l'UI (marqueur visuel)
+          shadowMemorySource: 'exact',   // Type de correspondance
+          originalCategory: entity.suggestedCategory, // Sauvegarde de la catégorie IA
+          originalScore: entity.score,                // Sauvegarde du score IA
+        };
+      }
+
+      // --- PHASE 2 : Recherche FUZZY (Levenshtein) ---
+      // UNIQUEMENT pour les entités de 5+ caractères (protection acronymes)
+      if (entityLength >= MIN_LENGTH_FOR_FUZZY) {
+        let bestMatch = null;
+        let bestDistance = Infinity;
+
+        for (const entry of normalizedDictionary) {
+          const distance = levenshteinDistance(entityWordLower, entry.normalizedRaw);
+
+          // Garder la meilleure correspondance sous le seuil
+          if (distance <= LEVENSHTEIN_THRESHOLD && distance < bestDistance) {
+            bestDistance = distance;
+            bestMatch = entry;
+          }
+
+          // Optimisation : distance 0 = exact match déjà traité en Phase 1,
+          // distance 1 est quasi-parfait, pas besoin de chercher plus loin
+          if (bestDistance === 1) break;
+        }
+
+        if (bestMatch) {
+          console.log(
+            `[Shadow Memory] 🔍 Match FUZZY (distance=${bestDistance}) : ` +
+            `"${entity.word}" ≈ "${bestMatch.entityRaw}" → ` +
+            `catégorie forcée "${bestMatch.forcedCategory}" ` +
+            `(IA avait proposé "${entity.suggestedCategory}" à ${entity.score}%)`
+          );
+          return {
+            ...entity,
+            suggestedCategory: bestMatch.forcedCategory,
+            score: 100,
+            shadowMemoryMatch: true,
+            shadowMemorySource: 'fuzzy',
+            shadowMemoryDistance: bestDistance,
+            originalCategory: entity.suggestedCategory,
+            originalScore: entity.score,
+          };
+        }
+      }
+      // else: entité ≤ 4 chars sans match exact → on laisse l'IA tranquille
+      // (protection contre les faux positifs sur acronymes)
+
+      // --- Aucune correspondance : retourner l'entité inchangée ---
+      return entity;
+    });
+  } catch (error) {
+    // En cas d'erreur critique (IndexedDB inaccessible, etc.),
+    // on retourne les entités brutes sans modification pour ne pas
+    // bloquer le pipeline NER. L'IA fonctionne normalement.
+    console.error(
+      '[Shadow Memory] ❌ Erreur lors de l\'application du dictionnaire. ' +
+      'Résultats NER bruts retournés sans modification.',
+      error
+    );
+    return entities;
+  }
+}

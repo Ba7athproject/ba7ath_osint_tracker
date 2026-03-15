@@ -1,8 +1,19 @@
 /**
- * Proxy de service du moteur NER — Ba7ath OSINT Tracker v1.6
+ * ============================================================================
+ * Proxy de service du moteur NER — Ba7ath OSINT Tracker v1.7
+ * ============================================================================
+ *
  * Sert de wrapper asynchrone autour de `nerWorker.js` pour éviter
  * le blocage du thread principal et les crashs STATUS_BREAKPOINT.
+ *
+ * [v1.7] Intégration du Shadow Memory : après réception des résultats bruts
+ * du Worker, le middleware `applyShadowMemory` intercepte chaque entité et
+ * croise avec le dictionnaire d'apprentissage humain avant de renvoyer
+ * les suggestions au hook React.
+ * ============================================================================
  */
+
+import { applyShadowMemory } from './shadowMemory';
 
 let worker = null;
 let messageIdCounter = 0;
@@ -104,9 +115,19 @@ export function getModelStatus() {
 
 /**
  * Analyse de plusieurs blocs de texte (document complet) de façon asynchrone via le worker.
+ *
+ * [v1.7] SHADOW MEMORY MIDDLEWARE :
+ * Après réception des résultats bruts du worker DistilBERT, cette fonction
+ * applique le dictionnaire d'apprentissage humain (Shadow Memory) pour
+ * écraser les classifications de l'IA lorsqu'une correspondance est trouvée.
+ *
+ * Le flux est :
+ *   Worker (inférence brute) → applyShadowMemory (interception) → retour au hook
+ *
  * @param {Array} textBlocks - Tableau d'objets { title, content }
  * @param {Array} appCategories - Catégories disponibles pour le mapping
- * @returns {Promise<Array>} Suggestions d'entités fusionnées et dédoublonnées
+ * @param {Function|null} onProgress - Callback de progression optionnel
+ * @returns {Promise<Array>} Suggestions d'entités fusionnées, dédoublonnées, et corrigées
  */
 export async function analyzeDocument(textBlocks, appCategories = [], onProgress = null) {
   if (!isReady) {
@@ -117,6 +138,24 @@ export async function analyzeDocument(textBlocks, appCategories = [], onProgress
     onProgressCallback = onProgress;
   }
 
-  // Délestage vers le worker
-  return await sendToWorker('analyzeDocument', { textBlocks, appCategories });
+  // Étape 1 : Délestage de l'inférence brute vers le worker DistilBERT
+  const rawResults = await sendToWorker('analyzeDocument', { textBlocks, appCategories });
+
+  // Étape 2 : INTERCEPTION — Application du dictionnaire d'apprentissage humain
+  // (Shadow Memory). Cette étape croise chaque entité brute avec les corrections
+  // validées par l'investigateur. Les correspondances entraînent un remplacement
+  // de catégorie et un score forcé à 100%.
+  try {
+    const enhancedResults = await applyShadowMemory(rawResults);
+    return enhancedResults;
+  } catch (shadowError) {
+    // Sécurité : en cas d'échec du Shadow Memory, on retourne les résultats
+    // bruts de l'IA sans modification. Le pipeline NER ne doit JAMAIS crasher
+    // à cause du système d'apprentissage.
+    console.warn(
+      '[NER Engine Proxy] ⚠️ Shadow Memory middleware failed. Raw results returned.',
+      shadowError
+    );
+    return rawResults;
+  }
 }

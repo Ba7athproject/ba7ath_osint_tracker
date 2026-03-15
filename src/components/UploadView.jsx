@@ -132,7 +132,7 @@ export default function UploadView({ onDataParsed, papaLoaded, onSessionImport }
 
         {/* Version */}
         <p className="mt-6 text-xs text-slate-400 dark:text-slate-500 animate-fade-in" style={{ animationDelay: '500ms' }}>
-          v1.6.0 — Fait avec ❤️ pour l'OSINT
+          v1.7.0 — Fait avec ❤️ pour l'OSINT
         </p>
       </div>
     </div>

@@ -1,10 +1,38 @@
 /**
+ * ============================================================================
  * useNerEngine — Hook React pour l'intégration du moteur NER
- * Ba7ath OSINT Tracker v1.6
+ * Ba7ath OSINT Tracker v1.7
+ * ============================================================================
+ *
+ * [v1.7] Intégration du Shadow Memory (Human-in-the-Loop) :
+ * Ce hook expose désormais des fonctions d'apprentissage permettant à
+ * l'investigateur de sauvegarder ses corrections de catégorisation.
+ * Les corrections sont persistées dans IndexedDB et appliquées
+ * automatiquement lors des analyses NER suivantes.
+ *
+ * Nouvelles fonctions exportées :
+ *   - learnCorrection(entityName, forcedCategory) : sauvegarde une correction
+ *   - forgetCorrection(entityName) : supprime une correction apprise
+ *   - clearShadowMemory() : purge complète du dictionnaire
+ *   - shadowMemorySize : nombre de corrections en mémoire (état réactif)
+ * ============================================================================
  */
 
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { loadModel, getModelStatus, analyzeDocument } from '../services/nerEngine';
+import {
+  saveCorrectionToDictionary,
+  removeCorrectionFromDictionary,
+  clearDictionary,
+  loadDictionary,
+} from '../services/shadowMemory';
+import {
+  loadIgnoreList,
+  addToIgnoreList,
+  removeFromIgnoreList,
+  clearIgnoreList,
+  overwriteIgnoreList
+} from '../services/ignoreList';
 
 /**
  * @param {Array} categories - Catégories d'entités disponibles dans l'application
@@ -25,6 +53,37 @@ export function useNerEngine(categories = []) {
   const dismissedRef = useRef({});
   const [analyzingDocId, setAnalyzingDocId] = useState(null); // Suivi du document en cours d'analyse
   const [analysisProgress, setAnalysisProgress] = useState({ current: 0, total: 0, label: '' });
+
+  // ============================================================================
+  // [v1.7] SHADOW MEMORY — État réactif du dictionnaire d'apprentissage
+  // ============================================================================
+
+  /**
+   * Nombre de corrections stockées dans le dictionnaire d'apprentissage.
+   * Mis à jour automatiquement au montage et après chaque opération CRUD.
+   * Permet à l'UI d'afficher un compteur ou un badge "X corrections apprises".
+   */
+  const [shadowMemorySize, setShadowMemorySize] = useState(0);
+
+  // [v1.7] Ignore List — Entités bannies
+  const [ignoreList, setIgnoreList] = useState(new Set());
+
+  // Montage initial : Chargement Shadow Memory et Ignore List
+  useEffect(() => {
+    loadDictionary().then(dict => {
+      setShadowMemorySize(dict.length || 0);
+    }).catch(err => {
+      console.warn('[useNerEngine] Impossible de charger la Shadow Memory au montage.', err);
+    });
+
+    loadIgnoreList().then(list => {
+      setIgnoreList(list);
+    }).catch(err => {
+      console.warn('[useNerEngine] Impossible de charger la Ignore List au montage.', err);
+    });
+  }, []);
+
+
 
   /**
    * Initialisation du modèle NER (téléchargement + chargement en mémoire).
@@ -78,9 +137,12 @@ export function useNerEngine(categories = []) {
         }
       });
 
-      // Filtrage des suggestions déjà ignorées
+      // Filtrage des suggestions déjà ignorées ou bannies via la Ignore List
       const dismissed = dismissedRef.current[docUuid] || new Set();
-      const filtered = results.filter(r => !dismissed.has(r.word.toLowerCase()));
+      const filtered = results.filter(r => 
+        !dismissed.has(r.word.toLowerCase()) && 
+        !ignoreList.has(r.word.toLowerCase())
+      );
 
       setSuggestions(prev => ({
         ...prev,
@@ -220,6 +282,169 @@ export function useNerEngine(categories = []) {
     }
   }, []);
 
+  // ============================================================================
+  // [v1.7] SHADOW MEMORY — Fonctions d'apprentissage (Human-in-the-Loop)
+  // ============================================================================
+
+  /**
+   * Enregistre une correction de l'investigateur dans le dictionnaire d'apprentissage.
+   *
+   * Doit être appelée lorsque l'utilisateur modifie manuellement la catégorie
+   * d'une entité. La prochaine fois que l'IA détectera cette entité (ou une
+   * variante proche via Levenshtein), elle adoptera automatiquement la
+   * catégorie de l'utilisateur avec un score de confiance de 100%.
+   *
+   * @param {string} entityName - Le nom brut de l'entité (ex: "Elbit Systems")
+   * @param {string} forcedCategory - L'ID de la catégorie choisie par l'utilisateur
+   * @returns {Promise<void>}
+   *
+   * @example
+   *   // L'utilisateur change "Elbit Systems" de "Organisation" à "Entreprise"
+   *   await learnCorrection("Elbit Systems", "Entreprise");
+   *   // → Les analyses futures forceront "Elbit Systems" en "Entreprise" à 100%
+   */
+  const learnCorrection = useCallback(async (entityName, forcedCategory) => {
+    try {
+      const updatedDictionary = await saveCorrectionToDictionary(entityName, forcedCategory);
+      setShadowMemorySize(updatedDictionary.length);
+      console.log(
+        `[useNerEngine] 🧠 Shadow Memory: correction apprise — ` +
+        `"${entityName}" → ${forcedCategory} (${updatedDictionary.length} corrections en mémoire)`
+      );
+    } catch (error) {
+      console.error('[useNerEngine] Shadow Memory learn failed:', error);
+    }
+  }, []);
+
+  /**
+   * Apprend un lot de corrections en une seule opération (Optimisation transition de page).
+   * @param {Array<{entityRaw: string, forcedCategory: string}>} entries 
+   */
+  const learnCorrectionsBatch = useCallback(async (entries) => {
+    if (!entries || entries.length === 0) return;
+    try {
+      // Import dynamique pour éviter les dépendances circulaires
+      const { saveCorrectionsBatch } = await import('../services/shadowMemory.js');
+      const updatedDictionary = await saveCorrectionsBatch(entries);
+      setShadowMemorySize(updatedDictionary.length);
+      console.log(`[useNerEngine] 🧠 Shadow Memory: Batch de ${entries.length} corrections appris.`);
+    } catch (error) {
+      console.error('[useNerEngine] Shadow Memory batch learn failed:', error);
+    }
+  }, []);
+
+  /**
+   * Oublie une correction précédemment apprise (désapprentissage).
+   *
+   * Utile si l'investigateur réalise qu'une correction forcée était erronée
+   * et souhaite laisser l'IA classifier librement cette entité à l'avenir.
+   *
+   * @param {string} entityName - Le nom brut de l'entité à oublier
+   * @returns {Promise<void>}
+   */
+  const forgetCorrection = useCallback(async (entityName) => {
+    try {
+      const updatedDictionary = await removeCorrectionFromDictionary(entityName);
+      setShadowMemorySize(updatedDictionary.length);
+      console.log(
+        `[useNerEngine] 🧠 Shadow Memory: correction oubliée — ` +
+        `"${entityName}" (${updatedDictionary.length} corrections en mémoire)`
+      );
+    } catch (error) {
+      console.error('[useNerEngine] Shadow Memory forget failed:', error);
+    }
+  }, []);
+
+  /**
+   * Purge complète de la mémoire fantôme (Shadow Memory).
+   *
+   * Réinitialise toutes les corrections apprises. L'IA revient à son
+   * comportement de classification de base, sans aucune surcharge humaine.
+   * Usage typique : changement de sujet d'investigation ou reset de projet.
+   *
+   * @returns {Promise<void>}
+   */
+  const clearShadowMemory = useCallback(async () => {
+    try {
+      await clearDictionary();
+      setShadowMemorySize(0);
+      console.log('[useNerEngine] 🧠 Shadow Memory: dictionnaire purgé');
+    } catch (error) {
+      console.error('[useNerEngine] Shadow Memory clear failed:', error);
+    }
+  }, []);
+
+  // ============================================================================
+  // [v1.7] IGNORE LIST — Fonctions de bannissement (Liste Rouge)
+  // ============================================================================
+
+  /**
+   * Ajoute une entité à la liste rouge (ignorée partout).
+   * @param {string} entityName
+   */
+  const banEntity = useCallback(async (entityName) => {
+    try {
+      const newList = await addToIgnoreList(entityName);
+      setIgnoreList(newList);
+      
+      // Nettoyage immédiat des suggestions en cours s'il y en a
+      setSuggestions(prev => {
+        const next = { ...prev };
+        const lowerName = entityName.trim().toLowerCase();
+        for (const docId in next) {
+          next[docId] = next[docId].filter(s => s.word.trim().toLowerCase() !== lowerName);
+        }
+        return next;
+      });
+      // L'index actif est réinitialisé pour éviter les décalages
+      setActiveSuggestionIndex(-1);
+      
+    } catch (error) {
+      console.error('[useNerEngine] Erreur lors du bannissement:', error);
+    }
+  }, []);
+
+  /**
+   * Retire une entité de la liste rouge.
+   * @param {string} entityName
+   */
+  const unbanEntity = useCallback(async (entityName) => {
+    try {
+      const newList = await removeFromIgnoreList(entityName);
+      setIgnoreList(newList);
+      console.log(`[useNerEngine] ♻️ Entité réautorisée : "${entityName}"`);
+    } catch (error) {
+      console.error('[useNerEngine] Erreur lors du retrait de la liste rouge:', error);
+    }
+  }, []);
+
+  /**
+   * Purge complète de la liste rouge.
+   */
+  const unbanAll = useCallback(async () => {
+    try {
+      await clearIgnoreList();
+      setIgnoreList(new Set());
+      console.log('[useNerEngine] 🧹 Liste rouge purgée.');
+    } catch (error) {
+      console.error('[useNerEngine] Erreur lors de la purge de la liste rouge:', error);
+    }
+  }, []);
+
+  /**
+   * Importe une nouvelle liste rouge (écrase l'existante).
+   * @param {Array<string>} newList
+   */
+  const importIgnoreList = useCallback(async (newList) => {
+    try {
+      const finalSet = await overwriteIgnoreList(newList);
+      setIgnoreList(finalSet);
+      console.log(`[useNerEngine] 📥 Liste rouge importée (${finalSet.size} entités).`);
+    } catch (error) {
+      console.error('[useNerEngine] Erreur lors de l\'import de la liste rouge:', error);
+    }
+  }, []);
+
   const result = useMemo(() => ({
     modelStatus,
     loadProgress,
@@ -239,12 +464,28 @@ export function useNerEngine(categories = []) {
     setActiveSuggestionIndex,
     analyzingDocId,
     analysisProgress,
+    // [v1.7] Shadow Memory
+    learnCorrection,
+    learnCorrectionsBatch,
+    forgetCorrection,
+    clearShadowMemory,
+    shadowMemorySize,
+    // [v1.7] Ignore List
+    ignoreList,
+    banEntity,
+    unbanEntity,
+    unbanAll,
+    importIgnoreList,
   }), [
     modelStatus, loadProgress, loadFile, errorMessage,
     initModel, analyzeDoc, getDocSuggestions,
     validateSuggestion, dismissSuggestion, dismissAll,
     MapsSuggestions, resetDismissed, clearAllSuggestions,
-    suggestions, activeSuggestionIndex, analyzingDocId, analysisProgress
+    suggestions, activeSuggestionIndex, analyzingDocId, analysisProgress,
+    // [v1.7] Shadow Memory
+    learnCorrection, learnCorrectionsBatch, forgetCorrection, clearShadowMemory, shadowMemorySize,
+    // [v1.7] Ignore List
+    ignoreList, banEntity, unbanEntity, unbanAll, importIgnoreList,
   ]);
 
   return result;

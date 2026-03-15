@@ -216,6 +216,15 @@ async function analyzeTextWorker(text, appCategories) {
 
   return aggregated.map(agg => {
     const finalWord = agg.word.replace(/(\w)\s+([.,!?%])/g, '$1$2').replace(/\s+/g, ' ').trim();
+    
+    // 🛡️ ANTI-HALLUCINATION FILTER
+    // Transformer models sometimes reconstruct tokens that don't match the source exactly.
+    // If the exact reconstructed word doesn't exist in the chunk, discard it.
+    if (!text.toLowerCase().includes(finalWord.toLowerCase())) {
+       // console.debug(`[AI Hallucination Filter] Dropped ghost entity: "${finalWord}"`);
+       return null;
+    }
+
     const suggestedCategory = mapToAppCategory(finalWord, agg.type, appCategories);
     if (!suggestedCategory) return null;
 

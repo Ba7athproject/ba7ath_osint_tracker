@@ -7,7 +7,7 @@ import {
 /**
  * ExportModal — Modal d'exportation multi-format.
  * Supporte : CSV Plat, CSV Groupé, JSON NER, et Export Réseau.
- * v1.6.0 — Sécurité renforcée & Optimisation UI.
+ * v1.7.0 — Sécurité renforcée & Optimisation UI.
  */
 export default function ExportModal({ 
   isOpen, 
