@@ -33,3 +33,4 @@ dist-ssr
 .env.test.local
 .env.production.local
 src-tauri/
+Propositions Gemini.md
