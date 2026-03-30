@@ -171,8 +171,6 @@ function mapToAppCategory(entityWord, entityGroup, appCategories) {
     const fallback = appCategories.find(c => ['divers', 'autre', 'misc'].some(kw => c.name.toLowerCase().includes(kw))) 
                    || appCategories[0];
     
-    // Log silencieux pour diagnostic
-    // console.debug(`[NER Worker] Fallback: ${entityWord} (${entityGroup}) -> ${fallback.id}`);
     return fallback.id;
   }
 
@@ -181,6 +179,7 @@ function mapToAppCategory(entityWord, entityGroup, appCategories) {
 
 async function analyzeTextWorker(text, appCategories) {
   if (!nerPipeline) throw new Error("Modèle non chargé");
+  
   const results = await nerPipeline(text, { ignore_labels: ['O'] });
   if (!results || results.length === 0) return [];
 
@@ -214,14 +213,13 @@ async function analyzeTextWorker(text, appCategories) {
   }
   if (current) aggregated.push(current);
 
-  return aggregated.map(agg => {
+  const mappedEntities = aggregated.map(agg => {
     const finalWord = agg.word.replace(/(\w)\s+([.,!?%])/g, '$1$2').replace(/\s+/g, ' ').trim();
     
     // 🛡️ ANTI-HALLUCINATION FILTER
     // Transformer models sometimes reconstruct tokens that don't match the source exactly.
     // If the exact reconstructed word doesn't exist in the chunk, discard it.
     if (!text.toLowerCase().includes(finalWord.toLowerCase())) {
-       // console.debug(`[AI Hallucination Filter] Dropped ghost entity: "${finalWord}"`);
        return null;
     }
 
@@ -238,16 +236,29 @@ async function analyzeTextWorker(text, appCategories) {
       description: generateEntityDescription(finalWord, agg.type, text),
     };
   }).filter(e => e !== null && e.word.length > 1);
+
+  // 🛡️ MEMORY CLEANUP : Aider le Garbage Collector du moteur V8
+  aggregated.length = 0;
+
+  return mappedEntities;
 }
 
 function chunkText(text, maxWords = 300) {
   const words = text.split(/\s+/);
   if (words.length <= maxWords) return [{ text, offset: 0 }];
+  
   const chunks = [];
   for (let i = 0; i < words.length; i += maxWords) {
-    const chunkWords = words.slice(i, i + maxWords);
+    // 🛡️ OVERLAP : Intégration d'un léger chevauchement (5 mots) pour ne pas couper une entité en deux
+    const overlap = i > 0 ? 5 : 0; 
+    const startIndex = Math.max(0, i - overlap);
+    const chunkWords = words.slice(startIndex, i + maxWords);
     const chunkText = chunkWords.join(' ');
-    chunks.push({ text: chunkText, offset: text.indexOf(chunkText) });
+    
+    // Calcul de l'offset approximatif dans la chaîne d'origine pour conserver le highlight exact
+    const offset = text.indexOf(chunkWords[0], startIndex > 0 ? chunks[chunks.length-1].offset : 0);
+    
+    chunks.push({ text: chunkText, offset: offset !== -1 ? offset : 0 });
   }
   return chunks;
 }
@@ -262,6 +273,7 @@ self.addEventListener('message', async (event) => {
         const Transformers = await import('@xenova/transformers');
         pipeline = Transformers.pipeline;
         env = Transformers.env;
+        
         // Optimisations Vitesse (Point V - v1.6.2)
         env.backends.onnx.wasm.numThreads = 1; // Le multi-thread peut être instable en worker, mais SIMD est crucial
         env.backends.onnx.wasm.simd = true;    // SIMD booste les perfs de 2x à 4x
@@ -280,6 +292,7 @@ self.addEventListener('message', async (event) => {
         });
       }
       self.postMessage({ type: 'result', id, result: true });
+      
     } else if (type === 'analyzeDocument') {
       const { textBlocks, appCategories } = payload;
       const allEntities = [];
@@ -301,17 +314,38 @@ self.addEventListener('message', async (event) => {
         });
 
         const chunks = chunkText(block.content);
-        for (const chunk of chunks) {
-          const entities = await analyzeTextWorker(chunk.text, appCategories);
-          allEntities.push(...entities.map(e => ({ ...e, start: e.start + chunk.offset, end: e.end + chunk.offset })));
+        
+        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+          const chunk = chunks[cIdx];
+          
+          // 🛡️ ISOLATION DES ERREURS : Si un chunk crashe, on l'ignore sans faire planter le document.
+          try {
+            const entities = await analyzeTextWorker(chunk.text, appCategories);
+            allEntities.push(...entities.map(e => ({ ...e, start: e.start + chunk.offset, end: e.end + chunk.offset })));
+          } catch (chunkErr) {
+            console.warn(`[Ba7ath NER] Chunk ignoré suite à une erreur (OOM prévenu):`, chunkErr);
+          }
+
+          // 🛡️ RAM SHIELD : Forcer la respiration asynchrone du navigateur (Yielding)
+          // Pause de 15ms pour laisser le Garbage Collector s'exécuter entre chaque bloc,
+          // empêchant la saturation de la RAM sur des documents massifs.
+          await new Promise(resolve => setTimeout(resolve, 15));
         }
       }
+      
       const deduped = new Map();
       for (const entity of allEntities) {
         const key = entity.word.toLowerCase();
-        if (!deduped.has(key) || deduped.get(key).score < entity.score) deduped.set(key, entity);
+        if (!deduped.has(key) || deduped.get(key).score < entity.score) {
+          deduped.set(key, entity);
+        }
       }
+      
       self.postMessage({ type: 'result', id, result: Array.from(deduped.values()).sort((a, b) => b.score - a.score) });
+      
+      // 🛡️ NETTOYAGE FINAL : Prévenir les fuites de mémoire
+      allEntities.length = 0;
+      deduped.clear();
     }
   } catch (error) {
     self.postMessage({ type: 'error', id, error: error.message });

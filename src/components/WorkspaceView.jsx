@@ -6,11 +6,10 @@ import StatsPanel from './StatsPanel';
 import IgnoreListModal from './IgnoreListModal';
 import { useNerEngine } from '../hooks/useNerEngine';
 
-// Constantes stables pour éviter les boucles de rendu infinies (Maximum update depth exceeded)
+// Constantes stables pour éviter les boucles de rendu infinies
 const EMPTY_ARRAY = [];
 const EMPTY_OBJECT = {};
 const DEFAULT_HIGHLIGHT_RULES = { capitals: true, acronyms: false, legal: false };
-
 
 const availableIcons = {
   Tag, Building2, ShieldAlert, User, MapPin, Globe, CreditCard, Activity, Box, Database, Cloud, FileText
@@ -140,12 +139,6 @@ export default function WorkspaceView({
     return suggestions[currentCompany.uuid] || [];
   }, [currentCompany, nerEnabled, suggestions]);
 
-  /**
-   * splitIntoParagraphs — Découpage intelligent pour la virtualisation.
-   * 1. Sépare le texte sur les sauts de ligne naturels (vrais paragraphes).
-   * 2. Si un paragraphe dépasse MAX_PARA_LENGTH, il est sous-découpé
-   * à la frontière d'un mot (espace) pour ne jamais couper un mot.
-   */
   const splitIntoParagraphs = useCallback((text, maxParaLength = 3000) => {
     if (!text) return [];
     const rawParas = text.split(/\n+/).filter((p) => p.trim().length > 0);
@@ -154,14 +147,12 @@ export default function WorkspaceView({
       if (para.length <= maxParaLength) {
         result.push(para);
       } else {
-        // Sous-découpage aux frontières de mots
         let start = 0;
         while (start < para.length) {
           let end = start + maxParaLength;
           if (end < para.length) {
-            // Walk back to the nearest space so we don't cut a word
             while (end > start && para[end] !== ' ') end--;
-            if (end === start) end = start + maxParaLength; // aucun espace trouvé, découpage forcé
+            if (end === start) end = start + maxParaLength;
           }
           result.push(para.slice(start, end).trim());
           start = end + 1;
@@ -171,7 +162,6 @@ export default function WorkspaceView({
     return result;
   }, []);
 
-  // Mise en cache (memoization) des paragraphes pour éviter le re-découpage à chaque rafraîchissement
   const currentParagraphs = useMemo(() => {
     if (!currentCompany) return [];
     if (currentCompany.texts) {
@@ -210,7 +200,6 @@ export default function WorkspaceView({
 
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // === SHADOW MEMORY BATCH COMMIT ===
   const commitShadowMemoryBatch = useCallback(() => {
     if (!currentCompany || !extractedEntities[currentCompany.uuid]) return;
     const finalEntities = extractedEntities[currentCompany.uuid];
@@ -223,6 +212,7 @@ export default function WorkspaceView({
       learnCorrectionsBatch(entries);
     }
   }, [currentCompany, extractedEntities, learnCorrectionsBatch]);
+  
   const entityInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
 
@@ -242,7 +232,6 @@ export default function WorkspaceView({
       setIsDarkMode(true);
     }
   };
-
 
   useEffect(() => {
     if (!searchQuery) {
@@ -324,76 +313,91 @@ export default function WorkspaceView({
     return existing.some(e => normalizeEntityName(e.name) === normInput);
   }, [currentEntityName, currentCompany, extractedEntities]);
   
+  // 🛡️ OPTIMISATION MAJEURE : Index Global pour recherche O(1)
+  const globalEntitiesIndex = useMemo(() => {
+    const map = new Map();
+    Object.entries(extractedEntities).forEach(([uuid, entities]) => {
+      entities.forEach(e => {
+        const normE = normalizeEntityName(e.name);
+        if (!normE) return;
+        if (!map.has(normE)) map.set(normE, []);
+        map.get(normE).push({ originUuid: uuid, entity: e });
+      });
+    });
+    return map;
+  }, [extractedEntities]);
+
+  // 🛡️ DÉTECTION DE CONFLIT OPTIMISÉE AVEC INCOHÉRENCE DE CATÉGORIE
   const detectConflict = useCallback((name, type, note, suggestionIndex = null) => {
     if (!name.trim() || !currentCompany) return null;
 
     const cleanName = name.trim();
     const normalizedClean = normalizeEntityName(cleanName);
+    if (!normalizedClean) return null;
 
-    // 1. LOCAL SCAN
-    const existingInDoc = extractedEntities[currentCompany.uuid] || [];
-    const localConflict = existingInDoc.find((e) => {
-      const normE = normalizeEntityName(e.name);
-      if (normE === normalizedClean) return true;
-      if (normalizedClean.length > 3 && normE.length > 3) {
-        return getLevenshteinDistance(normalizedClean, normE) <= 2;
+    let matchedEntries = globalEntitiesIndex.get(normalizedClean);
+
+    // Recherche fuzzy si pas de match exact
+    if (!matchedEntries && normalizedClean.length > 3) {
+      for (const [normE, entries] of globalEntitiesIndex.entries()) {
+        if (normE.length > 3 && getLevenshteinDistance(normalizedClean, normE) <= 2) {
+          matchedEntries = entries;
+          break;
+        }
       }
-      return false;
-    });
-
-    if (localConflict) {
-      return {
-        newName: cleanName,
-        existingEntity: localConflict,
-        type,
-        note: note.trim() || '',
-        scope: 'local',
-        origin: 'Cet enregistrement',
-        suggestionIndex
-      };
     }
 
-    // 2. GLOBAL SCAN
-    const globalMatch = Object.entries(extractedEntities).find(([uuid, entities]) => {
-      if (uuid === currentCompany.uuid) return false;
-      return entities.some(e => {
-        const normE = normalizeEntityName(e.name);
-        if (normE === normalizedClean) return true;
-        if (normalizedClean.length > 3 && normE.length > 3) {
-          return getLevenshteinDistance(normalizedClean, normE) <= 2;
-        }
-        return false;
-      });
-    });
+    if (matchedEntries && matchedEntries.length > 0) {
+      // Priorité 1 : Conflit LOCAL (dans le document courant)
+      const localMatch = matchedEntries.find(m => m.originUuid === currentCompany.uuid);
+      if (localMatch) {
+        return {
+          newName: cleanName,
+          existingEntity: localMatch.entity,
+          type,
+          note: note.trim() || '',
+          scope: 'local',
+          origin: 'Cet enregistrement',
+          suggestionIndex
+        };
+      }
 
-    if (globalMatch) {
-      const [originUuid, entities] = globalMatch;
-      const globalConflict = entities.find(e => {
-        const normE = normalizeEntityName(e.name);
-        if (normE === normalizedClean) return true;
-        if (normalizedClean.length > 3 && normE.length > 3) {
-          return getLevenshteinDistance(normalizedClean, normE) <= 2;
-        }
-        return false;
-      });
-      
-      const isStrictIdentical = globalConflict.name === cleanName;
-      
+      // Priorité 2 : Conflit de CATÉGORIE (Typage incohérent sur l'ensemble du projet)
+      // L'utilisateur tape un nom connu mais choisit une autre catégorie
+      const typeConflictMatch = matchedEntries.find(m => m.entity.type !== type);
+      if (typeConflictMatch) {
+        return {
+          newName: cleanName,
+          existingEntity: typeConflictMatch.entity,
+          type,
+          note: note.trim() || '',
+          scope: 'type-conflict',
+          origin: typeConflictMatch.originUuid,
+          suggestionIndex
+        };
+      }
+
+      // Priorité 3 : Conflit ORTHOGRAPHIQUE GLOBALE
+      // La catégorie est bonne, mais l'orthographe est légèrement différente
+      const globalMatch = matchedEntries[0];
+      const isStrictIdentical = globalMatch.entity.name === cleanName;
+
+      // On n'alerte pas si c'est strictement identique ET que la catégorie est la même
       if (!isStrictIdentical) {
         return {
           newName: cleanName,
-          existingEntity: globalConflict,
+          existingEntity: globalMatch.entity,
           type,
           note: note.trim() || '',
           scope: 'global',
-          origin: originUuid,
+          origin: globalMatch.originUuid,
           suggestionIndex
         };
       }
     }
 
     return null;
-  }, [currentCompany, extractedEntities]);
+  }, [currentCompany, globalEntitiesIndex]);
 
   const handleAddEntity = useCallback((force = false) => {
     if (!currentEntityName.trim() || !currentCompany) return;
@@ -424,15 +428,13 @@ export default function WorkspaceView({
     setCurrentEntityName('');
     setCurrentEntityNote('');
     if (entityInputRef.current) entityInputRef.current.focus();
-  }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, extractedEntities, setExtractedEntities]);
+  }, [currentEntityName, currentCompany, currentEntityType, currentEntityNote, setExtractedEntities, detectConflict]);
 
   const handleResolveConflict = (resolution) => {
     if (!pendingConflict || !currentCompany) return;
 
     const { newName, existingEntity, type, note, scope, suggestionIndex } = pendingConflict;
     
-    // Si la source est une suggestion IA, on la consomme du hook D'ABORD, 
-    // pour avoir l'objet entity exact (incluant isAiSuggestion) et l'enlever de la liste
     let aiEntity = null;
     let isAiSource = suggestionIndex !== null && suggestionIndex !== undefined;
     if (isAiSource) {
@@ -446,11 +448,12 @@ export default function WorkspaceView({
       if (resolution === 'merge-keep-old') {
         const alreadyInDoc = existingInDoc.some(e => normalizeEntityName(e.name) === normOld);
         if (!alreadyInDoc) {
-          // Keep old means we add the exact same entity that was conflicted with (if it came from another doc)
+          // Force l'ancien nom ET l'ancienne catégorie !
           existingInDoc.push({ ...existingEntity });
         }
       } else if (resolution === 'merge-keep-new') {
         const idx = existingInDoc.findIndex(e => normalizeEntityName(e.name) === normOld);
+        // Force le nouveau nom ET la nouvelle catégorie (Création de l'incohérence si c'était un type-conflict)
         const entityToInsert = isAiSource && aiEntity ? { ...aiEntity, name: newName, type, note } : { name: newName, type, note };
         
         if (idx !== -1) {
@@ -564,7 +567,6 @@ export default function WorkspaceView({
       }
 
       if (e.key === 'Enter') {
-        // NER : Si des suggestions sont actives et l'une d'elles est focalisée, validation de celle-ci
         if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
           if (!isInEntityInput || !currentEntityNameRef.current) {
             e.preventDefault();
@@ -582,7 +584,6 @@ export default function WorkspaceView({
         }
       }
 
-      // NER : Touche Échap pour rejeter la suggestion focalisée
       if (e.key === 'Escape') {
         if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
           e.preventDefault();
@@ -592,7 +593,6 @@ export default function WorkspaceView({
         }
       }
 
-      // NER : Touche Suppr (Delete ou Backspace sous certaines confs) pour BANNIR la suggestion focalisée
       if (e.key === 'Delete') {
         if (nerEnabledRef.current && nerSuggestionsRef.current.length > 0 && activeSuggestionIndexRef.current >= 0) {
           e.preventDefault();
@@ -602,7 +602,6 @@ export default function WorkspaceView({
         }
       }
 
-      // NER : Touche Tab pour parcourir les suggestions (Audit Point A)
       if (e.key === 'Tab' && nerEnabledRef.current && nerSuggestionsRef.current.length > 0) {
         if (!isInEntityInput && !isInSearch && !isInTextArea && !isInSelect) {
           e.preventDefault();
@@ -669,14 +668,12 @@ export default function WorkspaceView({
     };
   }, [highlightRules]);
 
-  // Ensemble des noms d'entités validées pour le document actuel (pour le surlignage rouge)
   const validatedEntityNames = useMemo(() => {
     if (!currentCompany) return new Set();
     const entities = extractedEntities[currentCompany.uuid] || [];
     return new Set(entities.map(e => e.name.toLowerCase()));
   }, [currentCompany, extractedEntities]);
 
-  // Gestion de la bascule NER IA
   const handleNerToggle = useCallback(async () => {
     if (modelStatus === 'idle' || modelStatus === 'error') {
       setNerEnabled(true);
@@ -692,26 +689,21 @@ export default function WorkspaceView({
     }
   }, [modelStatus, initModel, nerEnabled, currentCompany, analyzeDoc]);
 
-  // Analyse automatique lors du changement de document (si NER activé et modèle prêt)
   useEffect(() => {
-    setActiveSuggestionIndex(0); // Reset focus when navigating
+    setActiveSuggestionIndex(0);
     if (nerEnabled && modelStatus === 'ready' && currentCompany?.texts) {
-      // CORRECTION : Vérification de l'existence de la clé dans les suggestions
-      // Cela évite de relancer l'analyse si l'utilisateur a déjà validé toutes les suggestions (longueur 0)
       if (suggestions[currentCompany.uuid] === undefined && analyzingDocId !== currentCompany.uuid) {
         analyzeDoc(currentCompany.uuid, currentCompany.texts);
       }
     }
   }, [currentIndex, nerEnabled, modelStatus, setActiveSuggestionIndex, analyzeDoc, currentCompany, suggestions, analyzingDocId]);
 
-  // Gestion de la validation d'une suggestion NER (touche Entrée ou clic)
   const handleValidateNerSuggestion = useCallback((index) => {
     if (!currentCompany) return;
     const docSuggestions = suggestions[currentCompany.uuid] || [];
     const suggestion = docSuggestions[index];
     if (!suggestion) return;
 
-    // --- VÉRIFICATION DES DOUBLONS (Point K) ---
     const conflict = detectConflict(suggestion.word, suggestion.suggestedCategory, suggestion.description, index);
     if (conflict) {
       setPendingConflict(conflict);
@@ -730,7 +722,6 @@ export default function WorkspaceView({
     }
   }, [currentCompany, suggestions, detectConflict, validateSuggestion, setExtractedEntities]);
 
-  // Gestion du rejet d'une suggestion NER (touche Échap ou clic)
   const handleDismissNerSuggestion = useCallback((index) => {
     if (!currentCompany) return;
     dismissSuggestion(currentCompany.uuid, index);
@@ -745,7 +736,6 @@ export default function WorkspaceView({
     }
   }, [currentCompany, currentNerSuggestions, banEntity]);
 
-  // Synchronisation des références des gestionnaires NER après leurs déclarations
   useEffect(() => { handleValidateNerRef.current = handleValidateNerSuggestion; }, [handleValidateNerSuggestion]);
   useEffect(() => { handleDismissNerRef.current = handleDismissNerSuggestion; }, [handleDismissNerSuggestion]);
   useEffect(() => { handleBanNerRef.current = handleBanNerSuggestion; }, [handleBanNerSuggestion]);
@@ -754,12 +744,10 @@ export default function WorkspaceView({
     (text) => {
       if (!text) return <span>{text}</span>;
 
-      // Construction de la carte de surbrillance NER pour ce bloc de texte
       const nerSpans = [];
       if (nerEnabled && currentNerSuggestions.length > 0) {
         for (const suggestion of currentNerSuggestions) {
           const word = suggestion.word;
-          // 🛡️ BCL MÉMOIRE : Ignorer les hallucinations IA (chaînes vides) qui causent l'OOM
           if (!word || typeof word !== 'string' || word.trim() === '') continue;
           
           let searchFrom = 0;
@@ -777,19 +765,16 @@ export default function WorkspaceView({
         }
       }
 
-      // Vérification des correspondances avec les noms d'entités déjà validés
       if (validatedEntityNames.size > 0) {
         const entities = extractedEntities[currentCompany?.uuid] || [];
         for (const entity of entities) {
           const word = entity.name;
-          // 🛡️ BCL MÉMOIRE : Ignorer les saisies invalides
           if (!word || typeof word !== 'string' || word.trim() === '') continue;
 
           let searchFrom = 0;
           while (searchFrom < text.length) {
             const idx = text.indexOf(word, searchFrom);
             if (idx === -1) break;
-            // Pas d'ajout si déjà couvert par un segment de suggestion NER
             const alreadyCovered = nerSpans.some(
               s => s.start <= idx && s.end >= idx + word.length
             );
@@ -806,10 +791,8 @@ export default function WorkspaceView({
         }
       }
 
-      // Tri des segments par position de début, priorité aux éléments validés sur les suggestions
       nerSpans.sort((a, b) => a.start - b.start || (a.type === 'validated' ? -1 : 1));
 
-      // Suppression des segments chevauchants (conservation du premier)
       const cleanSpans = [];
       let lastEnd = 0;
       for (const span of nerSpans) {
@@ -819,7 +802,6 @@ export default function WorkspaceView({
         }
       }
 
-      // Si des segments NER existent, rendu avec surbrillance dédiée
       if (cleanSpans.length > 0) {
         const fragments = [];
         let pos = 0;
@@ -827,10 +809,8 @@ export default function WorkspaceView({
         for (let i = 0; i < cleanSpans.length; i++) {
           const span = cleanSpans[i];
 
-          // Texte situé avant ce segment
           if (pos < span.start) {
             const beforeText = text.slice(pos, span.start);
-            // Application du surlignage regex au texte hors suggestions NER
             if (highlightRegexInfo) {
               const { combinedRegex, testRegex } = highlightRegexInfo;
               const regParts = beforeText.split(combinedRegex);
@@ -850,7 +830,6 @@ export default function WorkspaceView({
             }
           }
 
-          // Le segment NER lui-même
           const spanText = text.slice(span.start, span.end);
           if (span.type === 'validated') {
             fragments.push(
@@ -888,7 +867,6 @@ export default function WorkspaceView({
           pos = span.end;
         }
 
-        // Texte restant après le dernier segment
         if (pos < text.length) {
           const afterText = text.slice(pos);
           if (highlightRegexInfo) {
@@ -913,7 +891,6 @@ export default function WorkspaceView({
         return fragments;
       }
 
-      // Repli : surlignage original par regex uniquement
       if (!highlightRegexInfo) return <span>{text}</span>;
 
       const { combinedRegex, testRegex } = highlightRegexInfo;
@@ -924,7 +901,6 @@ export default function WorkspaceView({
 
         const isMatch = testRegex.test(part) || part.match(combinedRegex);
         
-        // Si ça matche le regex, on vérifie si le mot n'est pas dans la liste rouge
         if (isMatch && !ignoreList.has(part.toLowerCase())) {
           return (
             <span
@@ -1050,7 +1026,7 @@ export default function WorkspaceView({
             </p>
           </div>
 
-          <div className="relative flex-1 min-w-[200px] max-w-md group">
+          <div className="relative flex-1 min-w-50 max-w-md group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-red-500 transition-colors" />
             <input
               type="text"
@@ -1300,14 +1276,14 @@ export default function WorkspaceView({
           </div>
 
           {/* PANNEAU DROIT */}
-          <div className="lg:col-span-5 sticky top-[100px] flex flex-col max-h-[calc(100vh-120px)] glass-card rounded-xl overflow-hidden">
+          <div className="lg:col-span-5 sticky top-25 flex flex-col max-h-[calc(100vh-120px)] glass-card rounded-xl overflow-hidden">
             <div className="bg-linear-to-r from-red-600 to-red-700 p-4 border-b border-red-700">
               <h2 className="font-bold text-lg text-white flex items-center gap-2">
                 <ShieldAlert className="w-5 h-5" /> Entités Ciblées
               </h2>
             </div>
 
-            {/* === PANNEAU DES SUGGESTIONS IA NER === */}
+          {/* === PANNEAU DES SUGGESTIONS IA NER === */}
             {nerEnabled && modelStatus === 'ready' && (
               <div className="border-b border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-900/10">
                 <div className="p-3 flex items-center justify-between">
@@ -1338,7 +1314,7 @@ export default function WorkspaceView({
                 </div>
 
                 {currentNerSuggestions.length > 0 ? (
-                  <div className="px-3 pb-3 space-y-2 max-h-[200px] overflow-y-auto">
+                  <div className="px-3 pb-3 space-y-2 max-h-50 overflow-y-auto">
                     {currentNerSuggestions.map((suggestion, idx) => (
                       <div
                         key={`${suggestion.word}-${idx}`}
@@ -1569,14 +1545,15 @@ export default function WorkspaceView({
           </div>
         )}
 
+        {/* 🛡️ MODALE DE CONFLIT OPTIMISÉE (Inclut les incohérences de catégories) */}
         {pendingConflict && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-md overflow-hidden animate-scale-in">
-              <div className={`p-4 flex items-center justify-between text-white ${pendingConflict.scope === 'local' ? 'bg-red-600' : 'bg-amber-500'}`}>
+              <div className={`p-4 flex items-center justify-between text-white ${pendingConflict.scope === 'local' ? 'bg-red-600' : pendingConflict.scope === 'type-conflict' ? 'bg-purple-600' : 'bg-amber-500'}`}>
                 <div className="flex items-center gap-3">
                   <ShieldAlert className="w-6 h-6" />
                   <h3 className="font-bold text-lg">
-                    {pendingConflict.scope === 'local' ? 'Doublon Détecté' : 'Similitude Détectée'}
+                    {pendingConflict.scope === 'local' ? 'Doublon Détecté' : pendingConflict.scope === 'type-conflict' ? 'Incohérence de Catégorie' : 'Similitude Détectée'}
                   </h3>
                 </div>
                 <span className="px-2 py-1 rounded bg-white/20 text-[10px] font-black tracking-widest uppercase">
@@ -1585,34 +1562,40 @@ export default function WorkspaceView({
               </div>
               <div className="p-6">
                 <div className="flex items-center gap-2 mb-4">
-                  <span className={`w-2 h-2 rounded-full ${pendingConflict.scope === 'local' ? 'bg-red-500' : 'bg-amber-500'}`}></span>
+                  <span className={`w-2 h-2 rounded-full ${pendingConflict.scope === 'local' ? 'bg-red-500' : pendingConflict.scope === 'type-conflict' ? 'bg-purple-500' : 'bg-amber-500'}`}></span>
                   <p className="text-slate-600 dark:text-slate-300 text-sm font-semibold uppercase tracking-tight">
                     Source: <span className="text-slate-900 dark:text-white font-bold">{pendingConflict.origin}</span>
                   </p>
                 </div>
                 
                 <p className="text-slate-500 dark:text-slate-400 text-xs mb-6 leading-relaxed italic">
-                  {pendingConflict.scope === 'local' 
+                  {pendingConflict.scope === 'type-conflict'
+                    ? "Cette entité existe déjà dans votre projet, mais sous une catégorie différente."
+                    : pendingConflict.scope === 'local' 
                     ? "Cette entité est déjà présente dans l'enregistrement actif." 
                     : "Cette entité ressemble à une saisie existante dans un autre enregistrement du projet."}
                 </p>
                 <div className="space-y-4">
                   <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
                     <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Entité existante :</p>
-                    <p className="font-bold text-slate-900 dark:text-white">« {pendingConflict.existingEntity.name} »</p>
+                    <p className="font-bold text-slate-900 dark:text-white">
+                      « {pendingConflict.existingEntity.name} » <span className="text-xs font-normal text-slate-500">en tant que [{categories.find(c => c.id === pendingConflict.existingEntity.type)?.name || pendingConflict.existingEntity.type}]</span>
+                    </p>
                   </div>
                   <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
                     <p className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 mb-1">Nouvelle tentative :</p>
-                    <p className="font-bold text-slate-900 dark:text-white">« {pendingConflict.newName} »</p>
+                    <p className="font-bold text-slate-900 dark:text-white">
+                      « {pendingConflict.newName} » <span className="text-xs font-normal text-slate-500">en tant que [{categories.find(c => c.id === pendingConflict.type)?.name || pendingConflict.type}]</span>
+                    </p>
                   </div>
                 </div>
                 <div className="mt-8 flex flex-col gap-2">
                   <button onClick={() => handleResolveConflict('merge-keep-old')} className="w-full py-2.5 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg font-bold transition-colors flex items-center justify-between">
-                    <span>Fusionner (Garder l'ancien nom)</span>
+                    <span>{pendingConflict.scope === 'type-conflict' ? `Garder la catégorie existante [${categories.find(c => c.id === pendingConflict.existingEntity.type)?.name || pendingConflict.existingEntity.type}]` : "Fusionner (Garder l'ancien nom)"}</span>
                     <CheckCircle2 className="w-4 h-4 text-slate-400" />
                   </button>
                   <button onClick={() => handleResolveConflict('merge-keep-new')} className="w-full py-2.5 px-4 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white rounded-lg font-bold transition-colors flex items-center justify-between">
-                    <span>Remplacer par le nouveau</span>
+                    <span>{pendingConflict.scope === 'type-conflict' ? `Forcer la nouvelle catégorie (Créera une incohérence)` : "Remplacer par le nouveau"}</span>
                     <Save className="w-4 h-4 text-blue-400" />
                   </button>
                   <div className="relative py-2">

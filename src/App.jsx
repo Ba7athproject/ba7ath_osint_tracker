@@ -4,6 +4,10 @@ import UploadView from './components/UploadView';
 import ConfigureView from './components/ConfigureView';
 import WorkspaceView from './components/WorkspaceView';
 import { Loader2 } from 'lucide-react';
+import Papa from 'papaparse'; // 🔒 AJOUT : Import local pour souveraineté totale
+
+// Rendre Papa disponible globalement pour UploadView sans le casser
+window.Papa = Papa;
 
 const LOCAL_STORAGE_KEY = 'ba7ath_osint_session_v2';
 
@@ -77,17 +81,7 @@ export default function ManualTagger() {
     }
   }, [isSessionLoaded, session.entreprises, session.csvHeaders, session.rawCsvData, session.columnMapping.id, setSession]);
 
-  const [papaLoaded, setPapaLoaded] = useState(false);
-
-  // Charger PapaParse globalement
-  useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js';
-    script.async = true;
-    script.onload = () => setPapaLoaded(true);
-    document.body.appendChild(script);
-    return () => document.body.removeChild(script);
-  }, []);
+  // 🗑️ SUPPRESSION : Le useEffect qui chargeait le script externe depuis cdnjs a été retiré.
 
   // Migration localStorage -> IndexedDB & Restauration
   useEffect(() => {
@@ -212,7 +206,8 @@ export default function ManualTagger() {
   };
 
   if (!isCsvLoaded && !configStep) {
-    return <UploadView onDataParsed={handleDataParsed} papaLoaded={papaLoaded} onSessionImport={handleSessionImport} />;
+    // L'analyseur est désormais natif, on passe true par défaut.
+    return <UploadView onDataParsed={handleDataParsed} papaLoaded={true} onSessionImport={handleSessionImport} />;
   }
 
   const handleUpdateRawData = (headers, data) => {
